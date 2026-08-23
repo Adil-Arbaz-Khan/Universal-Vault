@@ -144,7 +144,7 @@ chmod +x lock.sh unlock.sh status.sh
 
 ### 4. Android (via Termux)
 ```bash
-# 1. Install Termux from F-Droid, then run:
+# 1. Install Termux from PlayStore/F-Droid, then run:
 pkg install python git -y
 git clone https://github.com/Adil-Arbaz-Khan/Universal-Vault.git
 cd Universal-Vault
