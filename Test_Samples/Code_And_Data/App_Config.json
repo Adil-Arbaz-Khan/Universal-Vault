@@ -1,0 +1,6 @@
+{
+  "project": "Universal Vault",
+  "author": "Adil Arbaz Khan",
+  "version": "4.0",
+  "crypto": "AES-256-CBC + 100k PBKDF2"
+}

@@ -1,0 +1,5 @@
+=== Universal Vault Quick Notes ===
+
+1. All files here are genuine.
+2. When locked, double-clicking will fail.
+3. When unlocked, everything opens bit-perfect.
