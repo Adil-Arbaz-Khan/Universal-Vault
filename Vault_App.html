@@ -398,7 +398,7 @@
     <div class="field-label-row">
       <label class="field-label" for="passInput">Master Password</label>
       <div class="security-badge" id="securityIndicator">
-        <span>🛡️ 250k PBKDF2 + HMAC-SHA256</span>
+        <span>🛡️ 600k PBKDF2 + HMAC-SHA256</span>
       </div>
     </div>
     <div class="input-wrapper">
@@ -457,7 +457,7 @@ const MAGIC_V4 = "VAULTV04";
 const MAGIC_V3 = "VAULTV03";
 const MAGIC_V2 = "VAULTV02";
 const MAGIC_V1 = "HDRLOK01";
-const KDF_ITERS_V5 = 250000;
+const KDF_ITERS_V5 = 600000;
 
 let failedAttempts = 0;
 let lockoutTimer = null;
@@ -856,7 +856,7 @@ async function handleAction(action) {
       const elapsed = (performance.now() - t0).toFixed(1);
 
       downloadBlob(lockedBlob, file.name);
-      showToast(`🔒 <strong>Locked in ${elapsed}ms!</strong> (100% Full-File AEAD + 250k PBKDF2).`, "success");
+      showToast(`🔒 <strong>Locked in ${elapsed}ms!</strong> (100% Full-File AEAD + 600k PBKDF2).`, "success");
     }
   } catch (err) {
     showToast("❌ <strong>Error</strong>: " + err.message, "error");

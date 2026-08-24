@@ -7,7 +7,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 [![Security: AES-256-CTR + HMAC-SHA256](https://img.shields.io/badge/Security-AES--256--CTR%20%2B%20HMAC--SHA256-10b981.svg?style=for-the-badge)](SECURITY.md)
-[![KDF: PBKDF2 250k](https://img.shields.io/badge/KDF-PBKDF2--250k%20Iters-38bdf8.svg?style=for-the-badge)](SECURITY.md)
+[![KDF: OWASP 600k](https://img.shields.io/badge/KDF-PBKDF2--600k%20Iters%20(OWASP)-38bdf8.svg?style=for-the-badge)](SECURITY.md)
 [![Platforms: Universal](https://img.shields.io/badge/Platforms-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20iOS%20%7C%20Android%20%7C%20Web-818cf8.svg?style=for-the-badge)](#-quickstart-guide)
 [![Author](https://img.shields.io/badge/Author-Adil%20Arbaz%20Khan-f43f5e.svg?style=for-the-badge)](https://github.com/Adil-Arbaz-Khan)
 
@@ -43,8 +43,8 @@ Built specifically to solve the physical constraints of storage-limited drives (
   * Every byte of every file (from 1 KB documents to 50 GB videos) is fully encrypted using **AES-256-CTR block streaming** with zero unencrypted headers or carvable payloads remaining.
 * 🔒 **Anti-Tampering Encrypt-then-MAC (EtM) Integrity**:
   * Employs a master **HMAC-SHA256 tag** computed over the entire ciphertext payload. Any unauthorized bit-flipping or byte modification causes the decryption engine to reject the file immediately before executing any plaintext transforms.
-* ⚡ **NIST-Hardened 250,000 PBKDF2 Iterations**:
-  * NIST SP 800-132 hardened KDF with a unique 16-byte random salt per file, rendering offline GPU dictionary and rainbow table attacks computationally intractable.
+* ⚡ **OWASP 2026 Gold Standard: 600,000 PBKDF2 Iterations**:
+  * Exceeds standard defaults with **600,000 rounds of PBKDF2-SHA256** and unique 16-byte random salts per file, drastically throttling offline GPU dictionary attacks and rendering rainbow tables useless (strong passphrases recommended).
 * 🎬 **Zero-Copy In-Memory RAM Streamer (`Vault_App.html`)**:
   * Standalone client-side PWA that streams 4K video, audio, and documents **directly in volatile RAM** with **zero disk writes** and automated 3-minute memory auto-wiping.
 * 🌐 **True In-Place Transformation (0% Extra Storage)**:
@@ -62,7 +62,7 @@ Built specifically to solve the physical constraints of storage-limited drives (
 | **Install Footprint** | 🟢 **Zero Install** | 🟢 Built-in | 🔴 Heavy Kernel Drivers | 🟡 App Installation |
 | **In-Place File Encryption** | 🟢 **Instant (0 extra bytes)** | 🔴 Whole Drive Only | 🔴 Fixed Container File | 🔴 Extracts to Temp Disk |
 | **Temp File Disk Leaks** | 🛡️ **Zero Disk Leaks (RAM)** | 🛡️ None | 🛡️ None | ⚠️ **Severe (`AppData\Temp`)** |
-| **KDF Iterations** | 🛡️ **250,000 PBKDF2-SHA256** | 🛡️ TPM / PIN | 🛡️ Multiplier | 🔴 None / Low |
+| **KDF Iterations** | 🛡️ **600,000 PBKDF2-SHA256 (OWASP)** | 🛡️ TPM / PIN | 🛡️ Multiplier | 🔴 None / Low |
 | **Pricing / License** | 🟢 **100% Free & Open Source** | 🔴 $99–$199 OS Upgrade | 🟢 Open Source | 🟢 Free / Shareware |
 
 ---
@@ -81,7 +81,7 @@ Universal-Vault/
 ├── 🐧 status.sh               ← Linux / macOS / Android Termux Auditor
 │
 ├── 📂 tools/
-│   ├── vault.py               ← Universal Python 3 Core Engine (AES-256 + HMAC + 250k PBKDF2)
+│   ├── vault.py               ← Universal Python 3 Core Engine (AES-256 + HMAC + 600k PBKDF2)
 │   ├── header_vault.ps1       ← Universal PowerShell 7+ .NET Core Engine
 │   └── setup_termux.sh        ← Android Termux 1-Click Setup Script
 │
@@ -162,11 +162,12 @@ Universal Vault V5 appends a 96-byte authenticated cryptographic trailer at the 
 └──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴─────────────┴─────────────┘
 ```
 
-* **Two-Key Splitting**: $DK = \text{PBKDF2-SHA256}(\text{Password}, \text{Salt}, 250000, 64)$
+* **Two-Key Splitting**: $DK = \text{PBKDF2-SHA256}(\text{Password}, \text{Salt}, 600000, 64)$
   * $\text{EncKey} = DK[0..31]$ (AES-256-CTR)
   * $\text{MacKey} = DK[32..63]$ (HMAC-SHA256)
 * **MasterMAC**: $HMAC(\text{MacKey}, \text{Ciphertext})$ computed across the full file payload.
 * **AuthTag**: $HMAC(\text{MacKey}, \text{"VAULT\_AUTH\_V5"} \parallel \text{Salt})[0..15]$ (Constant-time password verification).
+* **Local UI Tripwire**: The on-disk failed attempt counter provides casual tamper-evidence for shared workstations (offline security is enforced by the 600,000 PBKDF2 computational cost).
 
 ---
 

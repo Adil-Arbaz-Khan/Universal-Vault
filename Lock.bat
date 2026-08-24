@@ -26,7 +26,7 @@ set "TARGET=!TARGET:'=!"
 
 echo.
 echo Target Scope: !TARGET!
-echo Encrypting with 100%% Full-File AEAD (AES-256 + HMAC-SHA256 + 250k PBKDF2)...
+echo Encrypting with 100%% Full-File AEAD (AES-256 + HMAC-SHA256 + 600k PBKDF2)...
 echo.
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\header_vault.ps1" -Action Lock -Path "!TARGET!"

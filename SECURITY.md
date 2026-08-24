@@ -4,9 +4,15 @@
 
 | Version | Status | Key Derivation (KDF) | Integrity / Authenticity | Payload Coverage |
 | :--- | :--- | :--- | :--- | :--- |
-| **V5.x** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (250,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** |
-| **V4.x** | 🟡 Supported (Legacy) | PBKDF2-HMAC-SHA256 (100,000 iters) | ⚠️ Password AuthHash only | ⚠️ Hybrid (Full <50MB / Header) |
-| **V3.x - V1.x** | 🔴 Deprecated | PBKDF2-HMAC-SHA256 (10k-100k iters) | ❌ None | ⚠️ Header-Only (64 KB) |
+| **V5.x** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** |
+| **V4.x** | 🟡 Deprecated (Migration Only) | PBKDF2-HMAC-SHA256 (100,000 iters) | ⚠️ Password AuthHash only (No payload MAC) | ⚠️ Hybrid (Full <50MB / Header) |
+| **V3.x - V1.x** | 🔴 End-of-Life | PBKDF2-HMAC-SHA256 (10k-100k iters) | ❌ None | ⚠️ Header-Only (64 KB) |
+
+> [!NOTE]
+> **Threat Model & Lockout Scope**: The on-disk failed attempt counter functions as a **local UI tripwire** for shared workstations and casual tampering. Offline brute-force resistance against raw copied files is governed solely by the computational work factor of **600,000 PBKDF2-SHA256 iterations** with unique per-file random salts (high-entropy passphrases recommended).
+
+> [!WARNING]
+> **Legacy V4 Migration Notice**: While Universal Vault V5 supports unlocking legacy V4/V3 files for backward compatibility, V4 files only authenticated the encryption key, not the underlying ciphertext payload. Users holding legacy V4 vaults are strongly advised to unlock and re-lock their files using **V5 Authenticated AEAD** to obtain full ciphertext integrity protection.
 
 ---
 
@@ -25,7 +31,7 @@ Universal Vault V5 implements an **Authenticated Encryption with Associated Data
 
 ### 3. Key Derivation & Master Splitting
 * **Standard**: NIST SP 800-132 `PBKDF2-HMAC-SHA256`.
-* **Iterations**: `250,000 rounds` with unique 16-byte random salt per file.
+* **Iterations**: `600,000 rounds` (OWASP 2026 Gold Standard) with unique 16-byte random salt per file.
 * **Key Separation**:
   * 32-byte Encryption Key (`EncKey`)
   * 32-byte MAC Key (`MacKey`)
@@ -38,6 +44,15 @@ Universal Vault V5 implements an **Authenticated Encryption with Associated Data
 │  "VAULTV05"  │  uint32 LE   │ Random Bytes │ Random Bytes │ HMAC-SHA256  │ HMAC-SHA256  │  uint16 LE  │  uint16 LE  │
 └──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴─────────────┴─────────────┘
 ```
+
+---
+
+## 🔍 Known Operational Boundaries & Security Assumptions
+
+1. **Password Entropy**: The 600,000 PBKDF2 iterations substantially raise the computational cost for offline GPU attackers, but cannot protect against trivially guessable passwords. High-entropy passphrases (14+ characters) remain essential.
+2. **Browser Garbage Collection & RAM**: In `Vault_App.html`, typed arrays containing key bytes are immediately overwritten with zeros via `.fill(0)`. However, JavaScript engine garbage collectors (V8/SpiderMonkey) manage low-level heap memory dynamically. For high-security environments, close browser tabs after session completion or use the "Wipe RAM" button.
+3. **Filesystem Metadata**: The Encrypt-then-MAC tag authenticates 100% of the ciphertext file content. External filesystem metadata (e.g. filename, file modification timestamps) are managed by the host OS filesystem.
+4. **Endpoint Security**: The cryptographic suite assumes the host endpoint is free from active hardware keyloggers or compromised memory-scraping malware.
 
 ---
 

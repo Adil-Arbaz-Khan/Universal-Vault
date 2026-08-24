@@ -30,7 +30,7 @@ FOOTER_LEN_V3 = 80
 FOOTER_LEN_V2 = 76
 
 CHUNK_SIZE_V5 = 64 * 1024  # 64 KB streaming blocks
-KDF_ITERS_V5 = 250000     # NIST 2024+ hardened standard
+KDF_ITERS_V5 = 600000     # OWASP 2026 Gold Standard (600,000 rounds)
 
 EXCLUDED_EXTS = {
     ".bat", ".cmd", ".ps1", ".py", ".html", ".sh", ".git", ".gitignore", ".env", ".log"
@@ -53,7 +53,7 @@ except ImportError:
 
 def derive_keys_v5(password, salt):
     """
-    Derives a 64-byte key material using PBKDF2-HMAC-SHA256 (250,000 iterations).
+    Derives a 64-byte key material using PBKDF2-HMAC-SHA256 (600,000 iterations - OWASP Standard).
     Splits into:
     - 32-byte AES-256 Encryption Key
     - 32-byte HMAC-SHA256 Authentication Key
@@ -223,7 +223,7 @@ def lock_file_v5(filepath, password):
             f.write(footer)
             f.flush()
 
-            return True, f"100% Full-File AEAD Armor ({size} bytes, Authenticated EtM + 250k PBKDF2)"
+            return True, f"100% Full-File AEAD Armor ({size} bytes, Authenticated EtM + 600k PBKDF2)"
     except Exception as e:
         return False, f"Error: {e}"
 
@@ -330,7 +330,7 @@ def unlock_file_v5(filepath, password):
                             f.write(dec_chunk)
                             pos += take
                     f.truncate(data_len)
-                    return True, f"Restored V4 full file ({data_len} bytes)"
+                    return True, f"Restored V4 full file ({data_len} bytes) - [MIGRATION ADVISORY: Legacy format without HMAC integrity. Re-lock with V5]"
                 else:
                     f.seek(0)
                     enc_header = f.read(chunk_size)
@@ -338,7 +338,7 @@ def unlock_file_v5(filepath, password):
                     f.seek(0)
                     f.write(dec_header)
                     f.truncate(data_len)
-                    return True, f"Restored V4 header ({chunk_size} bytes)"
+                    return True, f"Restored V4 header ({chunk_size} bytes) - [MIGRATION ADVISORY: Legacy format. Re-lock with V5]"
 
             else:
                 # Legacy V3/V2/V1 Support
@@ -357,13 +357,15 @@ def unlock_file_v5(filepath, password):
                 f.seek(0)
                 f.write(dec_header)
                 f.truncate(data_len)
-                return True, f"Restored legacy V{version} header ({chunk_size} bytes)"
+                return True, f"Restored legacy V{version} header ({chunk_size} bytes) - [MIGRATION ADVISORY: Legacy format. Re-lock with V5]"
 
     except Exception as e:
         return False, f"Error: {e}"
 
 def resolve_targets(path):
     path = os.path.abspath(path.strip('\'"'))
+    if os.path.islink(path):
+        return []
     if os.path.isfile(path):
         ext = os.path.splitext(path)[1].lower()
         if ext in EXCLUDED_EXTS:
@@ -371,15 +373,16 @@ def resolve_targets(path):
         return [path]
 
     target_files = []
-    for root, dirs, files in os.walk(path):
-        dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED_DIRS and not d.startswith(".")]
+    for root, dirs, files in os.walk(path, followlinks=False):
+        dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED_DIRS and not d.startswith(".") and not os.path.islink(os.path.join(root, d))]
         for file in files:
-            if file.startswith("."):
+            full_file_path = os.path.join(root, file)
+            if file.startswith(".") or os.path.islink(full_file_path):
                 continue
             ext = os.path.splitext(file)[1].lower()
             if ext in EXCLUDED_EXTS:
                 continue
-            target_files.append(os.path.join(root, file))
+            target_files.append(full_file_path)
     return target_files
 
 def process_targets(action, path, password=None):
@@ -391,7 +394,7 @@ def process_targets(action, path, password=None):
     print(f"  Files Identified: {len(targets)}")
     if action == "lock":
         print(f"  Armor Mode: 100% Full-File AEAD (Stream Encrypt-then-MAC)")
-        print(f"  Security: 250,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256")
+        print(f"  Security: 600,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256")
     print("=" * 70)
 
     if not targets:

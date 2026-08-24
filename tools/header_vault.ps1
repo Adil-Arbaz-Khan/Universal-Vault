@@ -25,7 +25,7 @@ $FOOTER_LEN_V3 = 80
 $FOOTER_LEN_V2 = 76
 
 $CHUNK_SIZE_V5 = 65536  # 64 KB streaming chunks
-$KDF_ITERS_V5 = 250000  # NIST 2024+ hardened standard
+$KDF_ITERS_V5 = 600000  # OWASP 2026 Gold Standard (600,000 rounds)
 
 function Get-KeysV5($pass, $salt) {
     $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($pass, $salt, $KDF_ITERS_V5, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
@@ -239,7 +239,7 @@ function Lock-FileV5($filePath, $pass) {
         $fs.Write($modeBytes, 0, 2)
         $fs.Flush()
 
-        return @{ Status = "Success"; Message = "100% Full-File AEAD ($dataLen bytes, Authenticated EtM + 250k PBKDF2)" }
+        return @{ Status = "Success"; Message = "100% Full-File AEAD ($dataLen bytes, Authenticated EtM + 600k PBKDF2)" }
     } finally {
         $fs.Close()
     }
@@ -367,19 +367,59 @@ if (Test-Path -LiteralPath $cleanPath) {
     exit 1
 }
 
+function Get-SafeTargetFiles([string]$rootPath) {
+    $results = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push($rootPath)
+
+    while ($stack.Count -gt 0) {
+        $currentDir = $stack.Pop()
+        try {
+            $di = New-Object System.IO.DirectoryInfo($currentDir)
+            if ($currentDir -ne $rootPath -and $di.Attributes.HasFlag([System.IO.FileAttributes]::ReparsePoint)) {
+                continue
+            }
+
+            foreach ($subDir in $di.GetDirectories()) {
+                $subName = $subDir.Name.ToLower()
+                if ($subDir.Name.StartsWith(".") -or 
+                    $subName -eq "tools" -or 
+                    $subName -eq ".vault" -or 
+                    $subName -eq "__pycache__" -or 
+                    $subName -eq ".git" -or 
+                    $subName -eq "node_modules" -or
+                    $subDir.Attributes.HasFlag([System.IO.FileAttributes]::ReparsePoint)) {
+                    continue
+                }
+                $stack.Push($subDir.FullName)
+            }
+
+            foreach ($file in $di.GetFiles()) {
+                $ext = $file.Extension.ToLower()
+                if ($file.Name.StartsWith(".") -or 
+                    $file.Attributes.HasFlag([System.IO.FileAttributes]::ReparsePoint) -or
+                    $ext -eq ".bat" -or $ext -eq ".ps1" -or $ext -eq ".cmd" -or 
+                    $ext -eq ".py" -or $ext -eq ".sh" -or $ext -eq ".html" -or 
+                    $ext -eq ".git" -or $ext -eq ".gitignore" -or $ext -eq ".env" -or $ext -eq ".log") {
+                    continue
+                }
+                $results.Add($file)
+            }
+        } catch {
+            # Skip any inaccessible folders
+        }
+    }
+    return $results.ToArray()
+}
+
 $targetFiles = @()
 if (Test-Path -LiteralPath $resolvedPath -PathType Leaf) {
-    $targetFiles = @(Get-Item -LiteralPath $resolvedPath)
-} else {
-    $targetFiles = Get-ChildItem -LiteralPath $resolvedPath -Recurse -File | Where-Object {
-        $parent = $_.DirectoryName
-        $ext = $_.Extension.ToLower()
-        $parent -notmatch "[\\/]tools($|[\\/])" -and
-        $parent -notmatch "[\\/]\.vault($|[\\/])" -and
-        $parent -notmatch "[\\/]__pycache__($|[\\/])" -and
-        $parent -notmatch "[\\/]\.git($|[\\/])" -and
-        $ext -ne ".bat" -and $ext -ne ".ps1" -and $ext -ne ".cmd" -and $ext -ne ".py" -and $ext -ne ".sh" -and $ext -ne ".html" -and $ext -ne ".git" -and $ext -ne ".gitignore"
+    $item = Get-Item -LiteralPath $resolvedPath
+    if (-not $item.Attributes.HasFlag([System.IO.FileAttributes]::ReparsePoint)) {
+        $targetFiles = @($item)
     }
+} else {
+    $targetFiles = Get-SafeTargetFiles $resolvedPath
 }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
@@ -388,7 +428,7 @@ Write-Host "  Target Scope: $resolvedPath" -ForegroundColor Cyan
 Write-Host "  Files Identified: $($targetFiles.Count)" -ForegroundColor Cyan
 if ($Action -eq "Lock") {
     Write-Host "  Armor Mode: 100% Full-File AEAD (Stream Encrypt-then-MAC)" -ForegroundColor Cyan
-    Write-Host "  Security: 250,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256" -ForegroundColor Cyan
+    Write-Host "  Security: 600,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256" -ForegroundColor Cyan
 }
 Write-Host "======================================================================" -ForegroundColor Cyan
 
