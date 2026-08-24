@@ -36,7 +36,7 @@ Thank you for your interest in improving **Universal Vault**! We welcome contrib
 ## 📐 Code Style & Guidelines
 
 * **Zero External Dependencies**: Keep core PowerShell and Python scripts functional using standard built-in libraries where possible (with graceful fallbacks for `cryptography` / `pycryptodome`).
-* **Cross-Platform Parity**: Any changes made to the `VAULTV04` binary specification must be implemented simultaneously across:
+* **Cross-Platform Parity**: Any changes made to the `VAULTV05` binary specification must be implemented simultaneously across:
   1. `tools/header_vault.ps1` (PowerShell .NET)
   2. `tools/vault.py` (Python 3.8+)
   3. `Vault_App.html` (WebCrypto & Pure JS)
