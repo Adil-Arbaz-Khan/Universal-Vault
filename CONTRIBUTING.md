@@ -41,6 +41,10 @@ Thank you for your interest in improving **Universal Vault**! We welcome contrib
   2. `tools/vault.py` (Python 3.8+)
   3. `Vault_App.html` (WebCrypto & Pure JS)
   4. Batch & Shell wrapper scripts
+* **Footer Format Variants**: The `VAULTV05` specification includes two valid footer lengths:
+  * **104-byte Resumable Footer**: Used during active in-progress lock/unlock operations to record physical byte checkpoints and state flags for crash recovery.
+  * **96-byte Sealed Base Footer**: Used for static, completed sealed vaults.  
+  Any engine reading vault files must handle both 104-byte and 96-byte variants, as well as preserving read support for legacy formats (V1–V4).
 
 ---
 

@@ -29,7 +29,13 @@ echo Target Scope: !TARGET!
 echo Encrypting with 100%% Full-File AEAD (AES-256 + HMAC-SHA256 + 600k PBKDF2)...
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\header_vault.ps1" -Action Lock -Path "!TARGET!"
+:: Check if Python is available for maximum C-accelerated throughput
+where python >nul 2>nul
+if %errorlevel% equ 0 (
+    python "%~dp0tools\vault.py" lock "!TARGET!"
+) else (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\header_vault.ps1" -Action Lock -Path "!TARGET!"
+)
 
 echo.
 pause

@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 echo =======================================================
-echo         UNIVERSAL VAULT - TARGET UNLOCKER
+echo    UNIVERSAL VAULT V5 - AUTHENTICATED AEAD UNLOCKER
 echo =======================================================
 
 set "TARGET=%~1"
@@ -26,10 +26,16 @@ set "TARGET=!TARGET:'=!"
 
 echo.
 echo Target Scope: !TARGET!
-echo Restoring file headers in-place...
+echo Decrypting and verifying AEAD HMAC integrity (600k PBKDF2)...
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\header_vault.ps1" -Action Unlock -Path "!TARGET!"
+:: Check if Python is available for maximum C-accelerated throughput
+where python >nul 2>nul
+if %errorlevel% equ 0 (
+    python "%~dp0tools\vault.py" unlock "!TARGET!"
+) else (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\header_vault.ps1" -Action Unlock -Path "!TARGET!"
+)
 
 echo.
 pause
