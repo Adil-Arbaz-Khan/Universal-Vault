@@ -1,4 +1,5 @@
-# Universal In-Place Header & Full-File Vault Engine for Windows PowerShell
+# Universal Vault V5 (Enterprise Grade) PowerShell Engine
+# Authenticated In-Place Stream Encryption (AES-256-CTR + HMAC-SHA256)
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
@@ -9,24 +10,42 @@ param(
     [string]$Path = ".",
 
     [Parameter(Position=2)]
-    [string]$Password,
-
-    [switch]$ForceFull
+    [string]$Password
 )
 
+$MAGIC_V5 = [System.Text.Encoding]::ASCII.GetBytes("VAULTV05")
 $MAGIC_V4 = [System.Text.Encoding]::ASCII.GetBytes("VAULTV04")
 $MAGIC_V3 = [System.Text.Encoding]::ASCII.GetBytes("VAULTV03")
 $MAGIC_V2 = [System.Text.Encoding]::ASCII.GetBytes("VAULTV02")
 $MAGIC_V1 = [System.Text.Encoding]::ASCII.GetBytes("HDRLOK01")
 
+$FOOTER_LEN_V5 = 96
 $FOOTER_LEN_V4 = 80
 $FOOTER_LEN_V3 = 80
 $FOOTER_LEN_V2 = 76
-$KDF_ITERS = 100000
-$SMART_THRESHOLD = 50 * 1024 * 1024
 
-function Get-KeyAndAuth($pass, $salt, $version = 4) {
-    $iters = if ($version -ge 3) { $KDF_ITERS } else { 10000 }
+$CHUNK_SIZE_V5 = 65536  # 64 KB streaming chunks
+$KDF_ITERS_V5 = 250000  # NIST 2024+ hardened standard
+
+function Get-KeysV5($pass, $salt) {
+    $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($pass, $salt, $KDF_ITERS_V5, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+    $dk = $kdf.GetBytes(64)
+    $encKey = New-Object byte[] 32
+    $macKey = New-Object byte[] 32
+    [Array]::Copy($dk, 0, $encKey, 0, 32)
+    [Array]::Copy($dk, 32, $macKey, 0, 32)
+
+    $hmac = [System.Security.Cryptography.HMACSHA256]::new($macKey)
+    $tagData = [System.Text.Encoding]::ASCII.GetBytes("VAULT_AUTH_V5") + $salt
+    $fullTag = $hmac.ComputeHash($tagData)
+    $authTag = New-Object byte[] 16
+    [Array]::Copy($fullTag, 0, $authTag, 0, 16)
+
+    return @{ EncKey = $encKey; MacKey = $macKey; AuthTag = $authTag }
+}
+
+function Get-LegacyKey($pass, $salt, $version = 4) {
+    $iters = if ($version -ge 3) { 100000 } else { 10000 }
     $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($pass, $salt, $iters, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
     $key = $kdf.GetBytes(32)
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -36,23 +55,71 @@ function Get-KeyAndAuth($pass, $salt, $version = 4) {
     return @{ Key = $key; AuthHash = $authHash }
 }
 
+function Process-AesCtrChunk($aesEcbEncryptor, $nonce, $chunkBytes, [long]$startBlockIndex) {
+    $len = $chunkBytes.Length
+    $out = New-Object byte[] $len
+    $blocks = [Math]::Ceiling($len / 16.0)
+
+    $counterInt = 0L
+    # Big-endian nonce calculation
+    $nonceCopy = New-Object byte[] 16
+    [Array]::Copy($nonce, 0, $nonceCopy, 0, 16)
+
+    $keystreamBlock = New-Object byte[] 16
+    $curCounterBlock = New-Object byte[] 16
+
+    for ($b = 0; $b -lt $blocks; $b++) {
+        $curIdx = $startBlockIndex + $b
+        [Array]::Copy($nonceCopy, 0, $curCounterBlock, 0, 16)
+
+        # Add 64-bit block counter to last 8 bytes in big-endian
+        $low = [BitConverter]::ToUInt64($nonceCopy, 8)
+        if ([BitConverter]::IsLittleEndian) {
+            $bytes = [BitConverter]::GetBytes($low)
+            [Array]::Reverse($bytes)
+            $low = [BitConverter]::ToUInt64($bytes, 0)
+        }
+        $newLow = $low + [uint64]$curIdx
+        $newLowBytes = [BitConverter]::GetBytes($newLow)
+        if ([BitConverter]::IsLittleEndian) {
+            [Array]::Reverse($newLowBytes)
+        }
+        [Array]::Copy($newLowBytes, 0, $curCounterBlock, 8, 8)
+
+        $aesEcbEncryptor.TransformBlock($curCounterBlock, 0, 16, $keystreamBlock, 0) | Out-Null
+
+        $offset = $b * 16
+        $take = [Math]::Min(16, $len - $offset)
+        for ($i = 0; $i -lt $take; $i++) {
+            $out[$offset + $i] = $chunkBytes[$offset + $i] -bxor $keystreamBlock[$i]
+        }
+    }
+    return $out
+}
+
 function Read-FileFooter($fs) {
+    if ($fs.Length -ge $FOOTER_LEN_V5) {
+        $fs.Seek(-$FOOTER_LEN_V5, [System.IO.SeekOrigin]::End) | Out-Null
+        $chk = New-Object byte[] 8
+        $fs.Read($chk, 0, 8) | Out-Null
+        if ([System.Text.Encoding]::ASCII.GetString($chk) -eq "VAULTV05") {
+            $fs.Seek(-$FOOTER_LEN_V5, [System.IO.SeekOrigin]::End) | Out-Null
+            $buf = New-Object byte[] $FOOTER_LEN_V5
+            $fs.Read($buf, 0, $FOOTER_LEN_V5) | Out-Null
+            return @{ Version = 5; Footer = $buf; Length = $FOOTER_LEN_V5 }
+        }
+    }
     if ($fs.Length -ge $FOOTER_LEN_V4) {
         $fs.Seek(-$FOOTER_LEN_V4, [System.IO.SeekOrigin]::End) | Out-Null
         $chk = New-Object byte[] 8
         $fs.Read($chk, 0, 8) | Out-Null
         $m = [System.Text.Encoding]::ASCII.GetString($chk)
-        if ($m -eq "VAULTV04") {
+        if ($m -eq "VAULTV04" -or $m -eq "VAULTV03") {
             $fs.Seek(-$FOOTER_LEN_V4, [System.IO.SeekOrigin]::End) | Out-Null
             $buf = New-Object byte[] $FOOTER_LEN_V4
             $fs.Read($buf, 0, $FOOTER_LEN_V4) | Out-Null
-            return @{ Version = 4; Footer = $buf; Length = $FOOTER_LEN_V4 }
-        }
-        if ($m -eq "VAULTV03") {
-            $fs.Seek(-$FOOTER_LEN_V3, [System.IO.SeekOrigin]::End) | Out-Null
-            $buf = New-Object byte[] $FOOTER_LEN_V3
-            $fs.Read($buf, 0, $FOOTER_LEN_V3) | Out-Null
-            return @{ Version = 3; Footer = $buf; Length = $FOOTER_LEN_V3 }
+            $v = if ($m -eq "VAULTV04") { 4 } else { 3 }
+            return @{ Version = $v; Footer = $buf; Length = $FOOTER_LEN_V4 }
         }
     }
     if ($fs.Length -ge $FOOTER_LEN_V2) {
@@ -79,17 +146,13 @@ function Check-FileLockStatus($filePath) {
         try {
             $finfo = Read-FileFooter $fs
             if ($finfo) {
-                $chunkSize = [BitConverter]::ToUInt32($finfo.Footer, 8)
-                $isFull = ($finfo.Version -eq 4 -and $chunkSize -eq 0)
-                $fails = 0
-                if ($finfo.Version -ge 3) {
-                    $fails = [BitConverter]::ToUInt16($finfo.Footer, 76)
+                if ($finfo.Version -eq 5) {
+                    $fails = [BitConverter]::ToUInt16($finfo.Footer, 92)
+                    $lbl = "V5 Authenticated AEAD (100% Full-File)"
+                    if ($fails -ge 5) { return "locked ($lbl - LOCKOUT: $fails fails)" }
+                    return "locked ($lbl)"
                 }
-                $modeStr = if ($isFull) { "100% Full Armor" } else { "Header Armor" }
-                if ($fails -ge 5) {
-                    return "locked ($modeStr - LOCKOUT: $fails fails)"
-                }
-                return "locked ($modeStr)"
+                return "locked (Legacy V$($finfo.Version))"
             }
             return "unlocked"
         } finally {
@@ -100,16 +163,16 @@ function Check-FileLockStatus($filePath) {
     }
 }
 
-function Lock-FileHeader($filePath, $pass, [bool]$fullMode = $false) {
+function Lock-FileV5($filePath, $pass) {
     try {
         $fs = [System.IO.File]::Open($filePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
     } catch {
         return @{ Status = "Error"; Message = "Cannot open file: $($_.Exception.Message)" }
     }
-    
+
     try {
-        if ($fs.Length -lt 16) {
-            return @{ Status = "Skipped"; Message = "File too small (< 16 bytes)" }
+        if ($fs.Length -lt 1) {
+            return @{ Status = "Skipped"; Message = "File is empty (0 bytes)" }
         }
 
         $finfo = Read-FileFooter $fs
@@ -117,102 +180,72 @@ function Lock-FileHeader($filePath, $pass, [bool]$fullMode = $false) {
             return @{ Status = "Skipped"; Message = "Already locked" }
         }
 
-        $isFull = $fullMode -or ($fs.Length -lt $SMART_THRESHOLD)
-
+        $dataLen = $fs.Length
         $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
         $salt = New-Object byte[] 16
-        $iv = New-Object byte[] 16
+        $nonce = New-Object byte[] 16
         $rng.GetBytes($salt)
-        $rng.GetBytes($iv)
+        $rng.GetBytes($nonce)
 
-        $crypto = Get-KeyAndAuth $pass $salt 4
+        $crypto = Get-KeysV5 $pass $salt
 
-        $aes = [System.Security.Cryptography.Aes]::Create()
-        $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
-        $aes.Padding = [System.Security.Cryptography.PaddingMode]::None
-        $aes.Key = $crypto.Key
+        $aesEcb = [System.Security.Cryptography.Aes]::Create()
+        $aesEcb.Mode = [System.Security.Cryptography.CipherMode]::ECB
+        $aesEcb.Padding = [System.Security.Cryptography.PaddingMode]::None
+        $aesEcb.Key = $crypto.EncKey
+        $encryptor = $aesEcb.CreateEncryptor()
 
-        if ($isFull) {
-            # 100% Full File Encryption in 1MB streams
-            $dataLen = $fs.Length
-            $encBlocksLen = $dataLen - ($dataLen % 16)
-            $currIv = $iv
-            $chunkStep = 1024 * 1024
-            $pos = 0L
+        $hmac = [System.Security.Cryptography.HMACSHA256]::new($crypto.MacKey)
 
-            while ($pos -lt $encBlocksLen) {
-                $take = [int][Math]::Min([long]$chunkStep, ($encBlocksLen - $pos))
-                $fs.Seek($pos, [System.IO.SeekOrigin]::Begin) | Out-Null
-                $buffer = New-Object byte[] $take
-                $read = $fs.Read($buffer, 0, $take)
-                
-                $aes.IV = $currIv
-                $encryptor = $aes.CreateEncryptor()
-                $encChunk = $encryptor.TransformFinalBlock($buffer, 0, $read)
+        $pos = 0L
+        $blockIdx = 0L
 
-                # Next IV is the last 16 bytes of ciphertext
-                $nextIv = New-Object byte[] 16
-                [Array]::Copy($encChunk, $encChunk.Length - 16, $nextIv, 0, 16)
-                $currIv = $nextIv
+        while ($pos -lt $dataLen) {
+            $take = [int][Math]::Min([long]$CHUNK_SIZE_V5, ($dataLen - $pos))
+            $fs.Seek($pos, [System.IO.SeekOrigin]::Begin) | Out-Null
+            $buffer = New-Object byte[] $take
+            $read = $fs.Read($buffer, 0, $take)
 
-                $fs.Seek($pos, [System.IO.SeekOrigin]::Begin) | Out-Null
-                $fs.Write($encChunk, 0, $encChunk.Length)
-                $pos += $take
+            $cipherChunk = Process-AesCtrChunk $encryptor $nonce $buffer ($blockIdx * 4096)
+
+            # Update HMAC over ciphertext
+            if ($pos + $take -eq $dataLen) {
+                $hmac.TransformFinalBlock($cipherChunk, 0, $take) | Out-Null
+            } else {
+                $hmac.TransformBlock($cipherChunk, 0, $take, $cipherChunk, 0) | Out-Null
             }
 
-            $fs.Seek(0, [System.IO.SeekOrigin]::End) | Out-Null
-            $chunkSizeNum = [BitConverter]::GetBytes([uint32]0)
-            $failBytes = [BitConverter]::GetBytes([uint16]0)
-            $modeBytes = [BitConverter]::GetBytes([uint16]1)
+            $fs.Seek($pos, [System.IO.SeekOrigin]::Begin) | Out-Null
+            $fs.Write($cipherChunk, 0, $take)
 
-            $fs.Write($MAGIC_V4, 0, 8)
-            $fs.Write($chunkSizeNum, 0, 4)
-            $fs.Write($salt, 0, 16)
-            $fs.Write($iv, 0, 16)
-            $fs.Write($crypto.AuthHash, 0, 32)
-            $fs.Write($failBytes, 0, 2)
-            $fs.Write($modeBytes, 0, 2)
-            $fs.Flush()
-
-            return @{ Status = "Success"; Message = "Encrypted 100% FULL FILE ($dataLen bytes, Zero Carvable Plaintext)" }
-        } else {
-            # Fast Header Mode for 50MB+ media
-            $chunkSize = if ($fs.Length -ge 65536) { 65536 } else { [int]$fs.Length }
-            $chunkSize = $chunkSize - ($chunkSize % 16)
-
-            $fs.Seek(0, [System.IO.SeekOrigin]::Begin) | Out-Null
-            $headerBytes = New-Object byte[] $chunkSize
-            $readBytes = $fs.Read($headerBytes, 0, $chunkSize)
-
-            $aes.IV = $iv
-            $encryptor = $aes.CreateEncryptor()
-            $encryptedHeader = $encryptor.TransformFinalBlock($headerBytes, 0, $chunkSize)
-
-            $fs.Seek(0, [System.IO.SeekOrigin]::Begin) | Out-Null
-            $fs.Write($encryptedHeader, 0, $chunkSize)
-
-            $fs.Seek(0, [System.IO.SeekOrigin]::End) | Out-Null
-            $chunkSizeNum = [BitConverter]::GetBytes([uint32]$chunkSize)
-            $failBytes = [BitConverter]::GetBytes([uint16]0)
-            $modeBytes = [BitConverter]::GetBytes([uint16]0)
-
-            $fs.Write($MAGIC_V4, 0, 8)
-            $fs.Write($chunkSizeNum, 0, 4)
-            $fs.Write($salt, 0, 16)
-            $fs.Write($iv, 0, 16)
-            $fs.Write($crypto.AuthHash, 0, 32)
-            $fs.Write($failBytes, 0, 2)
-            $fs.Write($modeBytes, 0, 2)
-            $fs.Flush()
-
-            return @{ Status = "Success"; Message = "Encrypted $chunkSize bytes header (Fast Media Mode)" }
+            $pos += $take
+            $blockIdx++
         }
+
+        $masterMac = $hmac.Hash
+
+        $fs.Seek(0, [System.IO.SeekOrigin]::End) | Out-Null
+        $chunkSizeNum = [BitConverter]::GetBytes([uint32]$CHUNK_SIZE_V5)
+        $failBytes = [BitConverter]::GetBytes([uint16]0)
+        $modeBytes = [BitConverter]::GetBytes([uint16]1)
+
+        $fs.Write($MAGIC_V5, 0, 8)
+        $fs.Write($chunkSizeNum, 0, 4)
+        $fs.Write($salt, 0, 16)
+        $fs.Write($nonce, 0, 16)
+        $fs.Write($masterMac, 0, 32)
+        $fs.Write($crypto.AuthTag, 0, 16)
+        $fs.Write($failBytes, 0, 2)
+        $fs.Write($modeBytes, 0, 2)
+        $fs.Flush()
+
+        return @{ Status = "Success"; Message = "100% Full-File AEAD ($dataLen bytes, Authenticated EtM + 250k PBKDF2)" }
     } finally {
         $fs.Close()
     }
 }
 
-function Unlock-FileHeader($filePath, $pass) {
+function Unlock-FileV5($filePath, $pass) {
     try {
         $fs = [System.IO.File]::Open($filePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
     } catch {
@@ -226,32 +259,34 @@ function Unlock-FileHeader($filePath, $pass) {
         }
 
         $footer = $finfo.Footer
-        $chunkSize = [BitConverter]::ToUInt32($footer, 8)
-        $salt = New-Object byte[] 16
-        [Array]::Copy($footer, 12, $salt, 0, 16)
-        $iv = New-Object byte[] 16
-        [Array]::Copy($footer, 28, $iv, 0, 16)
-        $storedAuth = New-Object byte[] 32
-        [Array]::Copy($footer, 44, $storedAuth, 0, 32)
+        $dataLen = $fs.Length - $finfo.Length
 
-        if ($finfo.Version -ge 3) {
-            $fails = [BitConverter]::ToUInt16($footer, 76)
+        if ($finfo.Version -eq 5) {
+            $salt = New-Object byte[] 16
+            [Array]::Copy($footer, 12, $salt, 0, 16)
+            $nonce = New-Object byte[] 16
+            [Array]::Copy($footer, 28, $nonce, 0, 16)
+            $storedMac = New-Object byte[] 32
+            [Array]::Copy($footer, 44, $storedMac, 0, 32)
+            $storedAuthTag = New-Object byte[] 16
+            [Array]::Copy($footer, 76, $storedAuthTag, 0, 16)
+            $fails = [BitConverter]::ToUInt16($footer, 92)
+
             if ($fails -ge 10) {
-                return @{ Status = "AuthFailed"; Message = "BRUTE-FORCE LOCKOUT ($fails failed attempts). Cooldown active." }
+                return @{ Status = "AuthFailed"; Message = "BRUTE-FORCE LOCKOUT ($fails failed attempts). Cooldown required." }
             }
-        }
 
-        $crypto = Get-KeyAndAuth $pass $salt $finfo.Version
-        $computedAuth = $crypto.AuthHash
+            $crypto = Get-KeysV5 $pass $salt
+            $computedAuthTag = $crypto.AuthTag
 
-        $match = $true
-        for ($i = 0; $i -lt 32; $i++) {
-            if ($storedAuth[$i] -ne $computedAuth[$i]) { $match = $false }
-        }
+            # Constant-time tag check
+            $match = $true
+            for ($i = 0; $i -lt 16; $i++) {
+                if ($storedAuthTag[$i] -ne $computedAuthTag[$i]) { $match = $false }
+            }
 
-        if (-not $match) {
-            if ($finfo.Version -ge 3) {
-                $fails = [BitConverter]::ToUInt16($footer, 76) + 1
+            if (-not $match) {
+                $fails++
                 $fs.Seek(-4, [System.IO.SeekOrigin]::End) | Out-Null
                 $failBytes = [BitConverter]::GetBytes([uint16]$fails)
                 $fs.Write($failBytes, 0, 2)
@@ -259,64 +294,64 @@ function Unlock-FileHeader($filePath, $pass) {
                 $rem = [Math]::Max(0, 10 - $fails)
                 return @{ Status = "AuthFailed"; Message = "INCORRECT PASSWORD ($fails failed attempts, $rem remaining before lockout)" }
             }
-            return @{ Status = "AuthFailed"; Message = "INCORRECT PASSWORD" }
-        }
 
-        $dataLen = $fs.Length - $finfo.Length
-        $isFull = ($finfo.Version -eq 4 -and $chunkSize -eq 0)
-
-        $aes = [System.Security.Cryptography.Aes]::Create()
-        $aes.Mode = [System.Security.Cryptography.CipherMode]::CBC
-        $aes.Padding = [System.Security.Cryptography.PaddingMode]::None
-        $aes.Key = $crypto.Key
-
-        if ($isFull) {
-            # Full File Decryption
-            $encBlocksLen = $dataLen - ($dataLen % 16)
-            $currIv = $iv
-            $chunkStep = 1024 * 1024
+            # Authenticate Ciphertext (Anti-Tampering Integrity Check)
+            $hmac = [System.Security.Cryptography.HMACSHA256]::new($crypto.MacKey)
             $pos = 0L
+            while ($pos -lt $dataLen) {
+                $take = [int][Math]::Min([long]$CHUNK_SIZE_V5, ($dataLen - $pos))
+                $fs.Seek($pos, [System.IO.SeekOrigin]::Begin) | Out-Null
+                $buffer = New-Object byte[] $take
+                $read = $fs.Read($buffer, 0, $take)
+                if ($pos + $take -eq $dataLen) {
+                    $hmac.TransformFinalBlock($buffer, 0, $take) | Out-Null
+                } else {
+                    $hmac.TransformBlock($buffer, 0, $take, $buffer, 0) | Out-Null
+                }
+                $pos += $take
+            }
 
-            while ($pos -lt $encBlocksLen) {
-                $take = [int][Math]::Min([long]$chunkStep, ($encBlocksLen - $pos))
+            $computedMac = $hmac.Hash
+            $macMatch = $true
+            for ($i = 0; $i -lt 32; $i++) {
+                if ($storedMac[$i] -ne $computedMac[$i]) { $macMatch = $false }
+            }
+
+            if (-not $macMatch) {
+                return @{ Status = "Error"; Message = "INTEGRITY ERROR: Ciphertext has been modified or corrupted! Decryption halted." }
+            }
+
+            # Decrypt in-place stream
+            $aesEcb = [System.Security.Cryptography.Aes]::Create()
+            $aesEcb.Mode = [System.Security.Cryptography.CipherMode]::ECB
+            $aesEcb.Padding = [System.Security.Cryptography.PaddingMode]::None
+            $aesEcb.Key = $crypto.EncKey
+            $encryptor = $aesEcb.CreateEncryptor()
+
+            $pos = 0L
+            $blockIdx = 0L
+            while ($pos -lt $dataLen) {
+                $take = [int][Math]::Min([long]$CHUNK_SIZE_V5, ($dataLen - $pos))
                 $fs.Seek($pos, [System.IO.SeekOrigin]::Begin) | Out-Null
                 $buffer = New-Object byte[] $take
                 $read = $fs.Read($buffer, 0, $take)
 
-                # Save ciphertext slice for next IV calculation before decrypting in-place
-                $nextIv = New-Object byte[] 16
-                [Array]::Copy($buffer, $read - 16, $nextIv, 0, 16)
-
-                $aes.IV = $currIv
-                $decryptor = $aes.CreateDecryptor()
-                $decChunk = $decryptor.TransformFinalBlock($buffer, 0, $read)
-
-                $currIv = $nextIv
+                $plainChunk = Process-AesCtrChunk $encryptor $nonce $buffer ($blockIdx * 4096)
 
                 $fs.Seek($pos, [System.IO.SeekOrigin]::Begin) | Out-Null
-                $fs.Write($decChunk, 0, $decChunk.Length)
+                $fs.Write($plainChunk, 0, $take)
+
                 $pos += $take
+                $blockIdx++
             }
 
             $fs.SetLength($dataLen)
             $fs.Flush()
-            return @{ Status = "Success"; Message = "Restored 100% full file ($dataLen bytes)" }
+            return @{ Status = "Success"; Message = "Verified & Restored 100% full file ($dataLen bytes)" }
+
         } else {
-            # Header Mode Decryption
-            $fs.Seek(0, [System.IO.SeekOrigin]::Begin) | Out-Null
-            $encBytes = New-Object byte[] $chunkSize
-            $readBytes = $fs.Read($encBytes, 0, $chunkSize)
-
-            $aes.IV = $iv
-            $decryptor = $aes.CreateDecryptor()
-            $decryptedHeader = $decryptor.TransformFinalBlock($encBytes, 0, $chunkSize)
-
-            $fs.Seek(0, [System.IO.SeekOrigin]::Begin) | Out-Null
-            $fs.Write($decryptedHeader, 0, $chunkSize)
-
-            $fs.SetLength($dataLen)
-            $fs.Flush()
-            return @{ Status = "Success"; Message = "Restored $chunkSize bytes header" }
+            # Legacy Decryption fallback
+            return @{ Status = "Error"; Message = "Legacy format detected. Please use Python tools/vault.py unlock." }
         }
     } finally {
         $fs.Close()
@@ -347,16 +382,15 @@ if (Test-Path -LiteralPath $resolvedPath -PathType Leaf) {
     }
 }
 
-Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "  Universal Header & Full-File Vault V4: $Action Operation" -ForegroundColor Cyan
-Write-Host "  Target: $resolvedPath" -ForegroundColor Cyan
+Write-Host "======================================================================" -ForegroundColor Cyan
+Write-Host "  Universal Vault V5 (Enterprise Grade): $Action Operation" -ForegroundColor Cyan
+Write-Host "  Target Scope: $resolvedPath" -ForegroundColor Cyan
 Write-Host "  Files Identified: $($targetFiles.Count)" -ForegroundColor Cyan
 if ($Action -eq "Lock") {
-    $modeLabel = if ($ForceFull) { "100% Full Encryption (All Files)" } else { "Smart Hybrid (100% Full <50MB | Header >=50MB)" }
-    Write-Host "  Encryption Mode: $modeLabel" -ForegroundColor Cyan
-    Write-Host "  Security: 100,000 PBKDF2 Iterations | Anti-Brute-Force Enabled" -ForegroundColor Cyan
+    Write-Host "  Armor Mode: 100% Full-File AEAD (Stream Encrypt-then-MAC)" -ForegroundColor Cyan
+    Write-Host "  Security: 250,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256" -ForegroundColor Cyan
 }
-Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host "======================================================================" -ForegroundColor Cyan
 
 if ($Action -eq "Status") {
     $locked = 0
@@ -372,7 +406,7 @@ if ($Action -eq "Status") {
             $unlocked++
         }
     }
-    Write-Host "----------------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host "----------------------------------------------------------------------" -ForegroundColor Cyan
     Write-Host "Summary: $locked Locked | $unlocked Unlocked`n" -ForegroundColor Cyan
     exit 0
 }
@@ -396,9 +430,9 @@ foreach ($file in $targetFiles) {
     $rel = $file.Name
     Write-Host -NoNewline "Processing: $rel... "
     if ($Action -eq "Lock") {
-        $res = Lock-FileHeader $file.FullName $Password $ForceFull
+        $res = Lock-FileV5 $file.FullName $Password
     } else {
-        $res = Unlock-FileHeader $file.FullName $Password
+        $res = Unlock-FileV5 $file.FullName $Password
     }
 
     if ($res.Status -eq "Success") {

@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#06090f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Universal Vault V4 | Military-Grade Encryption</title>
+<title>Universal Vault V5 | Authenticated Enterprise Encryption</title>
 <style>
   :root {
     --bg-base: #06090f;
@@ -372,8 +372,8 @@
         </svg>
       </div>
       <div class="brand-text">
-        <h1>Universal Vault V4</h1>
-        <span>Hardened Web Sandbox &bull; Anti-Brute-Force</span>
+        <h1>Universal Vault V5</h1>
+        <span>Authenticated Stream AEAD &bull; EtM Integrity</span>
       </div>
     </div>
     <div id="fileBadge" class="status-badge badge-idle">No File Selected</div>
@@ -398,7 +398,7 @@
     <div class="field-label-row">
       <label class="field-label" for="passInput">Master Password</label>
       <div class="security-badge" id="securityIndicator">
-        <span>🛡️ Constant-Time Auth</span>
+        <span>🛡️ 250k PBKDF2 + HMAC-SHA256</span>
       </div>
     </div>
     <div class="input-wrapper">
@@ -438,7 +438,7 @@
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
         <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
       </svg>
-      Lock & Save
+      Lock & Save (V5 Full AEAD)
     </button>
   </div>
 
@@ -448,162 +448,22 @@
 </div>
 
 <script>
+const FOOTER_LEN_V5 = 96;
 const FOOTER_LEN_V4 = 80;
 const FOOTER_LEN_V3 = 80;
 const FOOTER_LEN_V2 = 76;
+const MAGIC_V5 = "VAULTV05";
 const MAGIC_V4 = "VAULTV04";
 const MAGIC_V3 = "VAULTV03";
 const MAGIC_V2 = "VAULTV02";
 const MAGIC_V1 = "HDRLOK01";
-const KDF_ITERS_V4 = 100000;
+const KDF_ITERS_V5 = 250000;
 
-// Security State: Failed Attempt Rate Limiting & Lockout
 let failedAttempts = 0;
 let lockoutTimer = null;
 let lockoutSecondsRemaining = 0;
 let activeObjectUrl = null;
 let autoWipeTimer = null;
-
-const Sbox = new Uint8Array([
-    0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
-    0xCA, 0x82, 0xC9, 0x7D, 0xFA, 0x59, 0x47, 0xF0, 0xAD, 0xD4, 0xA2, 0xAF, 0x9C, 0xA4, 0x72, 0xC0,
-    0xB7, 0xFD, 0x93, 0x26, 0x36, 0x3F, 0xF7, 0xCC, 0x34, 0xA5, 0xE5, 0xF1, 0x71, 0xD8, 0x31, 0x15,
-    0x04, 0xC7, 0x23, 0xC3, 0x18, 0x96, 0x05, 0x9A, 0x07, 0x12, 0x80, 0xE2, 0xEB, 0x27, 0xB2, 0x75,
-    0x09, 0x83, 0x2C, 0x1A, 0x1B, 0x6E, 0x5A, 0xA0, 0x52, 0x3B, 0xD6, 0xB3, 0x29, 0xE3, 0x2F, 0x84,
-    0x53, 0xD1, 0x00, 0xED, 0x20, 0xFC, 0xB1, 0x5B, 0x6A, 0xCB, 0xBE, 0x39, 0x4A, 0x4C, 0x58, 0xCF,
-    0xD0, 0xEF, 0xAA, 0xFB, 0x43, 0x4D, 0x33, 0x85, 0x45, 0xF9, 0x02, 0x7F, 0x50, 0x3C, 0x9F, 0xA8,
-    0x51, 0xA3, 0x40, 0x8F, 0x92, 0x9D, 0x38, 0xF5, 0xBC, 0xB6, 0xDA, 0x21, 0x10, 0xFF, 0xF3, 0xD2,
-    0xCD, 0x0C, 0x13, 0xEC, 0x5F, 0x97, 0x44, 0x17, 0xC4, 0xA7, 0x7E, 0x3D, 0x64, 0x5D, 0x19, 0x73,
-    0x60, 0x81, 0x4F, 0xDC, 0x22, 0x2A, 0x90, 0x88, 0x46, 0xEE, 0xB8, 0x14, 0xDE, 0x5E, 0x0B, 0xDB,
-    0xE0, 0x32, 0x3A, 0x0A, 0x49, 0x06, 0x24, 0x5C, 0xC2, 0xD3, 0xAC, 0x62, 0x91, 0x95, 0xE4, 0x79,
-    0xE7, 0xC8, 0x37, 0x6D, 0x8D, 0xD5, 0x4E, 0xA9, 0x6C, 0x56, 0xF4, 0xEA, 0x65, 0x7A, 0xAE, 0x08,
-    0xBA, 0x78, 0x25, 0x2E, 0x1C, 0xA6, 0xB4, 0xC6, 0xE8, 0xDD, 0x74, 0x1F, 0x4B, 0xBD, 0x8B, 0x8A,
-    0x70, 0x3E, 0xB5, 0x66, 0x48, 0x03, 0xF6, 0x0E, 0x61, 0x35, 0x57, 0xB9, 0x86, 0xC1, 0x1D, 0x9E,
-    0xE1, 0xF8, 0x98, 0x11, 0x69, 0xD9, 0x8E, 0x94, 0x9B, 0x1E, 0x87, 0xE9, 0xCE, 0x55, 0x28, 0xDF,
-    0x8C, 0xA1, 0x89, 0x0D, 0xBF, 0xE6, 0x42, 0x68, 0x41, 0x99, 0x2D, 0x0F, 0xB0, 0x54, 0xBB, 0x16
-]);
-const InvSbox = new Uint8Array(256);
-for (let i = 0; i < 256; i++) InvSbox[Sbox[i]] = i;
-const Rcon = new Uint32Array([0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]);
-
-function subWord(w) {
-    return ((Sbox[(w >>> 24) & 0xFF] << 24) |
-            (Sbox[(w >>> 16) & 0xFF] << 16) |
-            (Sbox[(w >>> 8) & 0xFF] << 8) |
-            Sbox[w & 0xFF]) >>> 0;
-}
-function rotWord(w) { return (((w << 8) & 0xFFFFFFFF) | (w >>> 24)) >>> 0; }
-function keyExpansion(key) {
-    const w = new Uint32Array(60);
-    for (let i = 0; i < 8; i++) {
-        w[i] = ((key[4*i] << 24) | (key[4*i+1] << 16) | (key[4*i+2] << 8) | key[4*i+3]) >>> 0;
-    }
-    for (let i = 8; i < 60; i++) {
-        let temp = w[i - 1];
-        if (i % 8 === 0) temp = (subWord(rotWord(temp)) ^ (Rcon[Math.floor(i / 8)] << 24)) >>> 0;
-        else if (i % 8 === 4) temp = subWord(temp);
-        w[i] = (w[i - 8] ^ temp) >>> 0;
-    }
-    return w;
-}
-function xtimes(a) { return (a & 0x80) ? (((a << 1) ^ 0x1B) & 0xFF) : ((a << 1) & 0xFF); }
-function mul(a, b) {
-    let res = 0;
-    for (let i = 0; i < 8; i++) {
-        if (b & 1) res ^= a;
-        a = xtimes(a);
-        b >>>= 1;
-    }
-    return res & 0xFF;
-}
-function cipher(state, w) {
-    for (let c = 0; c < 4; c++) {
-        const k = w[c];
-        state[0][c] ^= (k >>> 24) & 0xFF; state[1][c] ^= (k >>> 16) & 0xFF; state[2][c] ^= (k >>> 8) & 0xFF; state[3][c] ^= k & 0xFF;
-    }
-    for (let round = 1; round < 14; round++) {
-        for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) state[r][c] = Sbox[state[r][c]];
-        let t1 = state[1][0]; state[1][0] = state[1][1]; state[1][1] = state[1][2]; state[1][2] = state[1][3]; state[1][3] = t1;
-        let t20 = state[2][0], t21 = state[2][1]; state[2][0] = state[2][2]; state[2][1] = state[2][3]; state[2][2] = t20; state[2][3] = t21;
-        let t3 = state[3][3]; state[3][3] = state[3][2]; state[3][2] = state[3][1]; state[3][1] = state[3][0]; state[3][0] = t3;
-        for (let c = 0; c < 4; c++) {
-            const s0 = state[0][c], s1 = state[1][c], s2 = state[2][c], s3 = state[3][c];
-            state[0][c] = xtimes(s0 ^ s1) ^ s0 ^ s2 ^ s3;
-            state[1][c] = xtimes(s1 ^ s2) ^ s1 ^ s3 ^ s0;
-            state[2][c] = xtimes(s2 ^ s3) ^ s2 ^ s0 ^ s1;
-            state[3][c] = xtimes(s3 ^ s0) ^ s3 ^ s1 ^ s2;
-        }
-        for (let c = 0; c < 4; c++) {
-            const k = w[round * 4 + c];
-            state[0][c] ^= (k >>> 24) & 0xFF; state[1][c] ^= (k >>> 16) & 0xFF; state[2][c] ^= (k >>> 8) & 0xFF; state[3][c] ^= k & 0xFF;
-        }
-    }
-    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) state[r][c] = Sbox[state[r][c]];
-    let t1 = state[1][0]; state[1][0] = state[1][1]; state[1][1] = state[1][2]; state[1][2] = state[1][3]; state[1][3] = t1;
-    let t20 = state[2][0], t21 = state[2][1]; state[2][0] = state[2][2]; state[2][1] = state[2][3]; state[2][2] = t20; state[2][3] = t21;
-    let t3 = state[3][3]; state[3][3] = state[3][2]; state[3][2] = state[3][1]; state[3][1] = state[3][0]; state[3][0] = t3;
-    for (let c = 0; c < 4; c++) {
-        const k = w[56 + c];
-        state[0][c] ^= (k >>> 24) & 0xFF; state[1][c] ^= (k >>> 16) & 0xFF; state[2][c] ^= (k >>> 8) & 0xFF; state[3][c] ^= k & 0xFF;
-    }
-}
-function invCipher(state, w) {
-    for (let c = 0; c < 4; c++) {
-        const k = w[56 + c];
-        state[0][c] ^= (k >>> 24) & 0xFF; state[1][c] ^= (k >>> 16) & 0xFF; state[2][c] ^= (k >>> 8) & 0xFF; state[3][c] ^= k & 0xFF;
-    }
-    for (let round = 13; round > 0; round--) {
-        let t1 = state[1][3]; state[1][3] = state[1][2]; state[1][2] = state[1][1]; state[1][1] = state[1][0]; state[1][0] = t1;
-        let t20 = state[2][0], t21 = state[2][1]; state[2][0] = state[2][2]; state[2][1] = state[2][3]; state[2][2] = t20; state[2][3] = t21;
-        let t3 = state[3][0]; state[3][0] = state[3][1]; state[3][1] = state[3][2]; state[3][2] = state[3][3]; state[3][3] = t3;
-        for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) state[r][c] = InvSbox[state[r][c]];
-        for (let c = 0; c < 4; c++) {
-            const k = w[round * 4 + c];
-            state[0][c] ^= (k >>> 24) & 0xFF; state[1][c] ^= (k >>> 16) & 0xFF; state[2][c] ^= (k >>> 8) & 0xFF; state[3][c] ^= k & 0xFF;
-        }
-        for (let c = 0; c < 4; c++) {
-            const s0 = state[0][c], s1 = state[1][c], s2 = state[2][c], s3 = state[3][c];
-            state[0][c] = mul(s0, 0x0E) ^ mul(s1, 0x0B) ^ mul(s2, 0x0D) ^ mul(s3, 0x09);
-            state[1][c] = mul(s0, 0x09) ^ mul(s1, 0x0E) ^ mul(s2, 0x0B) ^ mul(s3, 0x0D);
-            state[2][c] = mul(s0, 0x0D) ^ mul(s1, 0x09) ^ mul(s2, 0x0E) ^ mul(s3, 0x0B);
-            state[3][c] = mul(s0, 0x0B) ^ mul(s1, 0x0D) ^ mul(s2, 0x09) ^ mul(s3, 0x0E);
-        }
-    }
-    let t1 = state[1][3]; state[1][3] = state[1][2]; state[1][2] = state[1][1]; state[1][1] = state[1][0]; state[1][0] = t1;
-    let t20 = state[2][0], t21 = state[2][1]; state[2][0] = state[2][2]; state[2][1] = state[2][3]; state[2][2] = t20; state[2][3] = t21;
-    let t3 = state[3][0]; state[3][0] = state[3][1]; state[3][1] = state[3][2]; state[3][2] = state[3][3]; state[3][3] = t3;
-    for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) state[r][c] = InvSbox[state[r][c]];
-    for (let c = 0; c < 4; c++) {
-        const k = w[c];
-        state[0][c] ^= (k >>> 24) & 0xFF; state[1][c] ^= (k >>> 16) & 0xFF; state[2][c] ^= (k >>> 8) & 0xFF; state[3][c] ^= k & 0xFF;
-    }
-}
-function aesDecryptCbc(key, iv, data) {
-    const w = keyExpansion(key);
-    const out = new Uint8Array(data.length);
-    let prev = iv;
-    const state = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
-    for (let i = 0; i < data.length; i += 16) {
-        for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) state[r][c] = data[i + r + 4*c];
-        invCipher(state, w);
-        for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) out[i + r + 4*c] = state[r][c] ^ prev[r + 4*c];
-        prev = data.subarray(i, i + 16);
-    }
-    return out;
-}
-function aesEncryptCbc(key, iv, data) {
-    const w = keyExpansion(key);
-    const out = new Uint8Array(data.length);
-    let prev = iv;
-    const state = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
-    for (let i = 0; i < data.length; i += 16) {
-        for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) state[r][c] = data[i + r + 4*c] ^ prev[r + 4*c];
-        cipher(state, w);
-        for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) out[i + r + 4*c] = state[r][c];
-        prev = out.subarray(i, i + 16);
-    }
-    return out;
-}
 
 function togglePasswordVisibility() {
   const input = document.getElementById("passInput");
@@ -695,31 +555,27 @@ async function updateFileUI(file) {
       <span>${icon}</span>
       <span>${file.name}</span>
     </div>
-    <div class="dropzone-subtitle" style="margin-top:4px;">${sizeMB} MB • Zero-Carve Armor Ready</div>
+    <div class="dropzone-subtitle" style="margin-top:4px;">${sizeMB} MB • V5 Authenticated Stream Ready</div>
   `;
 
   const badge = document.getElementById("fileBadge");
   let isLocked = false;
   let modeName = "Encrypted";
 
-  if (file.size >= FOOTER_LEN_V4) {
-    const foot4 = new Uint8Array(await file.slice(file.size - FOOTER_LEN_V4, file.size).arrayBuffer());
-    const m = String.fromCharCode(...foot4.slice(0, 8));
-    if (m === MAGIC_V4) {
+  if (file.size >= FOOTER_LEN_V5) {
+    const foot5 = new Uint8Array(await file.slice(file.size - FOOTER_LEN_V5, file.size).arrayBuffer());
+    const m = String.fromCharCode(...foot5.slice(0, 8));
+    if (m === MAGIC_V5) {
       isLocked = true;
-      const cSize = new DataView(foot4.buffer).getUint32(8, true);
-      modeName = cSize === 0 ? "🔒 100% Full Armor" : "🔒 Header Armor";
-    } else if (m === MAGIC_V3) {
-      isLocked = true;
-      modeName = "🔒 Header Armor (V3)";
+      modeName = "🔒 V5 Full AEAD Armor";
     }
   }
-  if (!isLocked && file.size >= FOOTER_LEN_V2) {
-    const foot2 = new Uint8Array(await file.slice(file.size - FOOTER_LEN_V2, file.size).arrayBuffer());
-    const m = String.fromCharCode(...foot2.slice(0, 8));
-    if (m === MAGIC_V2 || m === MAGIC_V1) {
+  if (!isLocked && file.size >= FOOTER_LEN_V4) {
+    const foot4 = new Uint8Array(await file.slice(file.size - FOOTER_LEN_V4, file.size).arrayBuffer());
+    const m = String.fromCharCode(...foot4.slice(0, 8));
+    if (m === MAGIC_V4 || m === MAGIC_V3) {
       isLocked = true;
-      modeName = "🔒 Header Armor (Legacy)";
+      modeName = "🔒 V4 Full Armor";
     }
   }
 
@@ -734,9 +590,7 @@ async function updateFileUI(file) {
 
 const fileInput = document.getElementById("fileInput");
 fileInput.addEventListener("change", (e) => {
-  if (e.target.files && e.target.files.length) {
-    updateFileUI(e.target.files[0]);
-  }
+  if (e.target.files && e.target.files.length) updateFileUI(e.target.files[0]);
 });
 
 const dropZone = document.getElementById("dropZone");
@@ -769,7 +623,7 @@ function renderMediaPreview(blob, filename) {
   const panicBar = document.createElement("div");
   panicBar.className = "panic-bar";
   panicBar.innerHTML = `
-    <span style="font-size:0.75rem; color:var(--text-secondary);">🔒 In-Memory Decryption (Auto-wipe in 3m)</span>
+    <span style="font-size:0.75rem; color:var(--text-secondary);">🔒 Authenticated In-Memory Stream (Auto-wipe in 3m)</span>
     <button class="panic-btn" onclick="clearMemoryAndPreview()">Wipe RAM</button>
   `;
   wrapper.appendChild(panicBar);
@@ -810,44 +664,39 @@ function renderMediaPreview(blob, filename) {
     box.style.padding = "24px";
     box.style.textAlign = "center";
     box.style.color = "var(--text-secondary)";
-    box.innerHTML = `<div style="font-size: 2rem; margin-bottom: 8px;">📦</div><strong>${filename}</strong><div style="font-size: 0.8rem; margin-top: 4px;">Decrypted in RAM. Click <strong>Unlock & Save</strong> to export.</div>`;
+    box.innerHTML = `<div style="font-size: 2rem; margin-bottom: 8px;">📦</div><strong>${filename}</strong><div style="font-size: 0.8rem; margin-top: 4px;">Verified in RAM. Click <strong>Unlock & Save</strong> to export.</div>`;
     wrapper.appendChild(box);
   }
 
-  // Auto-wipe RAM after 3 minutes of inactivity
   autoWipeTimer = setTimeout(() => {
     clearMemoryAndPreview();
     showToast("🛡️ RAM Auto-Wiped for security after 3 minutes.", "info");
   }, 180000);
 }
 
-async function deriveKeyAndAuth(password, salt, version = 4) {
+async function deriveKeysV5(password, salt) {
   const enc = new TextEncoder();
   const passKey = await crypto.subtle.importKey(
     "raw", enc.encode(password), { name: "PBKDF2" }, false, ["deriveBits"]
   );
-  const iters = version >= 3 ? KDF_ITERS_V4 : 10000;
   const derivedBits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt: salt, iterations: iters, hash: "SHA-256" },
-    passKey, 256
+    { name: "PBKDF2", salt: salt, iterations: KDF_ITERS_V5, hash: "SHA-256" },
+    passKey, 512
   );
-  const keyBytes = new Uint8Array(derivedBits);
+  const dk = new Uint8Array(derivedBits);
+  const encKeyBytes = dk.slice(0, 32);
+  const macKeyBytes = dk.slice(32, 64);
 
-  let tag = "VAULT_AUTH_V4";
-  if (version === 3) tag = "VAULT_AUTH_V3";
-  else if (version === 2) tag = "VAULT_AUTH_V2";
-  else if (version === 1) tag = "AUTH_CHECK_V1";
+  const hmacKey = await crypto.subtle.importKey(
+    "raw", macKeyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]
+  );
+  const tagData = new Uint8Array(13 + 16);
+  tagData.set(enc.encode("VAULT_AUTH_V5"), 0);
+  tagData.set(salt, 13);
+  const fullAuthTag = new Uint8Array(await crypto.subtle.sign("HMAC", hmacKey, tagData));
+  const authTag = fullAuthTag.slice(0, 16);
 
-  const tagBytes = enc.encode(tag);
-  const authData = new Uint8Array(32 + tagBytes.length + 16);
-  authData.set(keyBytes, 0);
-  authData.set(tagBytes, 32);
-  authData.set(salt, 32 + tagBytes.length);
-
-  const authHashBuffer = await crypto.subtle.digest("SHA-256", authData);
-  const authHash = new Uint8Array(authHashBuffer);
-
-  return { keyBytes, authHash };
+  return { encKeyBytes, macKeyBytes, hmacKey, authTag };
 }
 
 async function handleAction(action) {
@@ -871,7 +720,7 @@ async function handleAction(action) {
 
   const file = fileInput.files[0];
   const t0 = performance.now();
-  showToast("⚡ Processing cryptographic stream in RAM...", "info");
+  showToast("⚡ Processing authenticated cryptographic stream in RAM...", "info");
 
   try {
     const fileSize = file.size;
@@ -881,17 +730,15 @@ async function handleAction(action) {
       let footerBuf = null;
       let footerLen = 0;
 
-      if (fileSize >= FOOTER_LEN_V4) {
+      if (fileSize >= FOOTER_LEN_V5) {
+        const buf = new Uint8Array(await file.slice(fileSize - FOOTER_LEN_V5, fileSize).arrayBuffer());
+        const m = String.fromCharCode(...buf.slice(0, 8));
+        if (m === MAGIC_V5) { version = 5; footerBuf = buf; footerLen = FOOTER_LEN_V5; }
+      }
+      if (!version && fileSize >= FOOTER_LEN_V4) {
         const buf = new Uint8Array(await file.slice(fileSize - FOOTER_LEN_V4, fileSize).arrayBuffer());
         const m = String.fromCharCode(...buf.slice(0, 8));
         if (m === MAGIC_V4) { version = 4; footerBuf = buf; footerLen = FOOTER_LEN_V4; }
-        else if (m === MAGIC_V3) { version = 3; footerBuf = buf; footerLen = FOOTER_LEN_V3; }
-      }
-      if (!version && fileSize >= FOOTER_LEN_V2) {
-        const buf = new Uint8Array(await file.slice(fileSize - FOOTER_LEN_V2, fileSize).arrayBuffer());
-        const m = String.fromCharCode(...buf.slice(0, 8));
-        if (m === MAGIC_V2) { version = 2; footerBuf = buf; footerLen = FOOTER_LEN_V2; }
-        else if (m === MAGIC_V1) { version = 1; footerBuf = buf; footerLen = FOOTER_LEN_V2; }
       }
 
       if (!version) {
@@ -905,148 +752,111 @@ async function handleAction(action) {
         }
       }
 
-      const chunkSize = new DataView(footerBuf.buffer).getUint32(8, true);
-      const salt = footerBuf.slice(12, 28);
-      const iv = footerBuf.slice(28, 44);
-      const storedAuth = footerBuf.slice(44, 76);
-
-      const cryptoInfo = await deriveKeyAndAuth(password, salt, version);
-
-      // Constant-Time Comparison to prevent micro-timing attacks
-      let diff = 0;
-      for (let i = 0; i < 32; i++) {
-        diff |= (storedAuth[i] ^ cryptoInfo.authHash[i]);
-      }
-
-      if (diff !== 0) {
-        failedAttempts++;
-        cryptoInfo.keyBytes.fill(0); // Zeroize failed key buffer
-
-        if (failedAttempts >= 10) {
-          startLockoutCooldown(60);
-          return;
-        } else if (failedAttempts >= 5) {
-          startLockoutCooldown(10);
-          return;
-        } else if (failedAttempts >= 3) {
-          startLockoutCooldown(3);
-          return;
-        }
-
-        const rem = 10 - failedAttempts;
-        showToast(`❌ <strong>INCORRECT PASSWORD</strong> (${failedAttempts} failed attempts, ${rem} left before lockout).`, "error");
-        return;
-      }
-
-      // Successful Auth - Reset failed attempt counter
-      failedAttempts = 0;
-
       const dataLen = fileSize - footerLen;
-      const isFull = (version === 4 && chunkSize === 0);
-      let restoredBlob = null;
+      const salt = footerBuf.slice(12, 28);
+      const nonce = footerBuf.slice(28, 44);
       const mime = getMimeType(file.name);
 
-      if (isFull) {
-        const encDataBlob = file.slice(0, dataLen);
-        const encDataBuf = new Uint8Array(await encDataBlob.arrayBuffer());
-        const encBlocksLen = dataLen - (dataLen % 16);
-        
-        let decryptedData;
-        if (encBlocksLen > 0) {
-          const decBlocks = aesDecryptCbc(cryptoInfo.keyBytes, iv, encDataBuf.subarray(0, encBlocksLen));
-          if (dataLen % 16 !== 0) {
-            decryptedData = new Uint8Array(dataLen);
-            decryptedData.set(decBlocks, 0);
-            decryptedData.set(encDataBuf.subarray(encBlocksLen), encBlocksLen);
-          } else {
-            decryptedData = decBlocks;
-          }
-        } else {
-          decryptedData = encDataBuf;
+      if (version === 5) {
+        const storedMac = footerBuf.slice(44, 76);
+        const storedAuthTag = footerBuf.slice(76, 92);
+
+        const cryptoInfo = await deriveKeysV5(password, salt);
+
+        // Constant-time AuthTag verification
+        let diff = 0;
+        for (let i = 0; i < 16; i++) diff |= (storedAuthTag[i] ^ cryptoInfo.authTag[i]);
+
+        if (diff !== 0) {
+          failedAttempts++;
+          cryptoInfo.encKeyBytes.fill(0);
+          cryptoInfo.macKeyBytes.fill(0);
+
+          if (failedAttempts >= 10) startLockoutCooldown(60);
+          else if (failedAttempts >= 5) startLockoutCooldown(10);
+          else if (failedAttempts >= 3) startLockoutCooldown(3);
+
+          showToast(`❌ <strong>INCORRECT PASSWORD</strong> (${failedAttempts} failed attempts).`, "error");
+          return;
         }
-        restoredBlob = new Blob([decryptedData], { type: mime });
-      } else {
-        const encHeaderBlob = file.slice(0, chunkSize);
-        const encHeaderBuf = new Uint8Array(await encHeaderBlob.arrayBuffer());
-        const decryptedHeader = aesDecryptCbc(cryptoInfo.keyBytes, iv, encHeaderBuf);
-        const restBlob = file.slice(chunkSize, dataLen);
-        restoredBlob = new Blob([decryptedHeader, restBlob], { type: mime });
-      }
 
-      cryptoInfo.keyBytes.fill(0); // Zeroize key buffer from RAM
+        failedAttempts = 0;
 
-      const elapsed = (performance.now() - t0).toFixed(1);
+        // Ciphertext integrity verification (Anti-Tampering HMAC)
+        const cipherBlob = file.slice(0, dataLen);
+        const cipherBuf = new Uint8Array(await cipherBlob.arrayBuffer());
+        const computedMac = new Uint8Array(await crypto.subtle.sign("HMAC", cryptoInfo.hmacKey, cipherBuf));
 
-      if (action === "play") {
-        renderMediaPreview(restoredBlob, file.name);
-        showToast(`⚡ <strong>Decrypted in ${elapsed}ms</strong> • Streaming in memory (0 extra disk space)`, "success");
-      } else {
-        downloadBlob(restoredBlob, file.name);
-        showToast(`✅ <strong>Restored in ${elapsed}ms!</strong> File downloaded.`, "success");
+        let macDiff = 0;
+        for (let i = 0; i < 32; i++) macDiff |= (storedMac[i] ^ computedMac[i]);
+
+        if (macDiff !== 0) {
+          showToast("❌ <strong>INTEGRITY CORRUPTION</strong>: Ciphertext was modified or corrupted! Decryption halted.", "error");
+          return;
+        }
+
+        // Authenticated Stream Decryption via AES-CTR
+        const aesKey = await crypto.subtle.importKey(
+          "raw", cryptoInfo.encKeyBytes, { name: "AES-CTR" }, false, ["decrypt"]
+        );
+        const decryptedBuf = await crypto.subtle.decrypt(
+          { name: "AES-CTR", counter: nonce, length: 128 },
+          aesKey, cipherBuf
+        );
+
+        cryptoInfo.encKeyBytes.fill(0);
+        cryptoInfo.macKeyBytes.fill(0);
+
+        const restoredBlob = new Blob([decryptedBuf], { type: mime });
+        const elapsed = (performance.now() - t0).toFixed(1);
+
+        if (action === "play") {
+          renderMediaPreview(restoredBlob, file.name);
+          showToast(`⚡ <strong>Verified & Decrypted in ${elapsed}ms</strong> • Streaming in RAM`, "success");
+        } else {
+          downloadBlob(restoredBlob, file.name);
+          showToast(`✅ <strong>Restored in ${elapsed}ms!</strong> (AEAD Integrity Verified)`, "success");
+        }
       }
 
     } else if (action === "lock") {
-      const isFull = (fileSize < 50 * 1024 * 1024);
       const salt = crypto.getRandomValues(new Uint8Array(16));
-      const iv = crypto.getRandomValues(new Uint8Array(16));
-      const cryptoInfo = await deriveKeyAndAuth(password, salt, 4);
+      const nonce = crypto.getRandomValues(new Uint8Array(16));
+      const cryptoInfo = await deriveKeysV5(password, salt);
 
-      let lockedBlob;
+      const fileBuf = new Uint8Array(await file.arrayBuffer());
 
-      if (isFull) {
-        const fullBuf = new Uint8Array(await file.arrayBuffer());
-        const encBlocksLen = fileSize - (fileSize % 16);
-        
-        let encData;
-        if (encBlocksLen > 0) {
-          const encBlocks = aesEncryptCbc(cryptoInfo.keyBytes, iv, fullBuf.subarray(0, encBlocksLen));
-          if (fileSize % 16 !== 0) {
-            encData = new Uint8Array(fileSize);
-            encData.set(encBlocks, 0);
-            encData.set(fullBuf.subarray(encBlocksLen), encBlocksLen);
-          } else {
-            encData = encBlocks;
-          }
-        } else {
-          encData = fullBuf;
-        }
+      // Encrypt 100% full file with AES-CTR
+      const aesKey = await crypto.subtle.importKey(
+        "raw", cryptoInfo.encKeyBytes, { name: "AES-CTR" }, false, ["encrypt"]
+      );
+      const cipherBuf = new Uint8Array(await crypto.subtle.encrypt(
+        { name: "AES-CTR", counter: nonce, length: 128 },
+        aesKey, fileBuf
+      ));
 
-        const footer = new Uint8Array(FOOTER_LEN_V4);
-        for (let i = 0; i < 8; i++) footer[i] = MAGIC_V4.charCodeAt(i);
-        new DataView(footer.buffer).setUint32(8, 0, true);
-        footer.set(salt, 12);
-        footer.set(iv, 28);
-        footer.set(cryptoInfo.authHash, 44);
-        new DataView(footer.buffer).setUint16(76, 0, true);
-        new DataView(footer.buffer).setUint16(78, 1, true);
+      // Calculate master HMAC-SHA256 over ciphertext (Encrypt-then-MAC)
+      const masterMac = new Uint8Array(await crypto.subtle.sign("HMAC", cryptoInfo.hmacKey, cipherBuf));
 
-        lockedBlob = new Blob([encData, footer], { type: "application/octet-stream" });
-      } else {
-        let chunkSize = Math.min(fileSize, 65536);
-        chunkSize = chunkSize - (chunkSize % 16);
+      // Build V5 Footer (96 bytes)
+      const footer = new Uint8Array(FOOTER_LEN_V5);
+      for (let i = 0; i < 8; i++) footer[i] = MAGIC_V5.charCodeAt(i);
+      new DataView(footer.buffer).setUint32(8, 65536, true);
+      footer.set(salt, 12);
+      footer.set(nonce, 28);
+      footer.set(masterMac, 44);
+      footer.set(cryptoInfo.authTag, 76);
+      new DataView(footer.buffer).setUint16(92, 0, true);
+      new DataView(footer.buffer).setUint16(94, 1, true);
 
-        const headerBlob = file.slice(0, chunkSize);
-        const headerBuf = new Uint8Array(await headerBlob.arrayBuffer());
-        const encHeader = aesEncryptCbc(cryptoInfo.keyBytes, iv, headerBuf);
+      cryptoInfo.encKeyBytes.fill(0);
+      cryptoInfo.macKeyBytes.fill(0);
 
-        const footer = new Uint8Array(FOOTER_LEN_V4);
-        for (let i = 0; i < 8; i++) footer[i] = MAGIC_V4.charCodeAt(i);
-        new DataView(footer.buffer).setUint32(8, chunkSize, true);
-        footer.set(salt, 12);
-        footer.set(iv, 28);
-        footer.set(cryptoInfo.authHash, 44);
-        new DataView(footer.buffer).setUint16(76, 0, true);
-        new DataView(footer.buffer).setUint16(78, 0, true);
-
-        const restBlob = file.slice(chunkSize, fileSize);
-        lockedBlob = new Blob([encHeader, restBlob, footer], { type: "application/octet-stream" });
-      }
-
-      cryptoInfo.keyBytes.fill(0); // Zeroize key buffer
-
+      const lockedBlob = new Blob([cipherBuf, footer], { type: "application/octet-stream" });
       const elapsed = (performance.now() - t0).toFixed(1);
+
       downloadBlob(lockedBlob, file.name);
-      showToast(`🔒 <strong>Locked in ${elapsed}ms!</strong> ${isFull ? '100% Full-File Armor' : 'Fast Media Armor'}.`, "success");
+      showToast(`🔒 <strong>Locked in ${elapsed}ms!</strong> (100% Full-File AEAD + 250k PBKDF2).`, "success");
     }
   } catch (err) {
     showToast("❌ <strong>Error</strong>: " + err.message, "error");

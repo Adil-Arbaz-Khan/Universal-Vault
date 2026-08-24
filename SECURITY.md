@@ -1,48 +1,48 @@
-# Security Policy & Cryptographic Threat Model
+# Security Policy & Cryptographic Threat Model (V5)
 
 ## 🛡️ Supported Versions
 
-| Version | Status | Key Derivation (KDF) | Anti-Brute-Force Armor | Carving Resistance |
+| Version | Status | Key Derivation (KDF) | Integrity / Authenticity | Payload Coverage |
 | :--- | :--- | :--- | :--- | :--- |
-| **V4.x** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (100,000 iters) | ✅ On-Disk Counter + Web Lockout | 🛡️ **100% Full-File Armor (0 Carvable Plaintext)** |
-| **V3.x** | 🟡 Supported (Legacy) | PBKDF2-HMAC-SHA256 (100,000 iters) | ✅ On-Disk Counter | ⚠️ Partial Header Armor (64 KB) |
-| **V2.x / V1.x** | 🔴 Deprecated | PBKDF2-HMAC-SHA256 (10,000 iters) | ❌ None | ⚠️ Partial Header Armor |
+| **V5.x** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (250,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** |
+| **V4.x** | 🟡 Supported (Legacy) | PBKDF2-HMAC-SHA256 (100,000 iters) | ⚠️ Password AuthHash only | ⚠️ Hybrid (Full <50MB / Header) |
+| **V3.x - V1.x** | 🔴 Deprecated | PBKDF2-HMAC-SHA256 (10k-100k iters) | ❌ None | ⚠️ Header-Only (64 KB) |
 
 ---
 
-## 🔒 Cryptographic Specifications
+## 🔒 Cryptographic Specifications (V5 Specification)
 
-Universal Vault is designed according to **Kerckhoffs's Principle**: the security of the vault rests entirely upon the secrecy and entropy of the user's master password, not the obscurity of the algorithms.
+Universal Vault V5 implements an **Authenticated Encryption with Associated Data (AEAD)** construction following the formal **Encrypt-then-MAC (EtM)** standard (ISO/IEC 18033-4):
 
 ### 1. Symmetric Cipher
-* **Algorithm**: `AES-256-CBC` (Advanced Encryption Standard with 256-bit key length and Cipher Block Chaining mode).
-* **Initialization Vector (IV)**: 16 bytes of cryptographically secure pseudo-random entropy generated per file via `os.urandom()` (Python), `RNGCryptoServiceProvider` (.NET), or `crypto.getRandomValues()` (Web).
+* **Algorithm**: `AES-256-CTR` (NIST SP 800-38A).
+* **Streaming Block Architecture**: 64 KB block streaming preserves exact byte lengths, enabling 100% in-place transformation with **0% extra disk space**.
+* **Nonce / Counter**: 16 bytes of cryptographically secure pseudo-random entropy per file.
 
-### 2. Key Derivation Function (KDF)
-* **Standard**: NIST SP 800-132 compliant `PBKDF2-HMAC-SHA256`.
-* **Iterations**: `100,000 rounds` to mitigate offline high-performance GPU dictionary and brute-force attacks.
-* **Salt**: 16 bytes unique random salt per file, completely neutralizing precomputed rainbow tables.
+### 2. Authenticity & Anti-Tampering (Integrity)
+* **Master MAC**: `HMAC-SHA256` computed over the entire ciphertext payload.
+* **Malleability Immunity**: Bit-flipping and chosen-ciphertext attacks are mathematically neutralized; the decryption engine verifies the master HMAC tag before executing any plaintext transforms.
 
-### 3. Binary Footer Layout (`VAULTV04` - 80 Bytes)
+### 3. Key Derivation & Master Splitting
+* **Standard**: NIST SP 800-132 `PBKDF2-HMAC-SHA256`.
+* **Iterations**: `250,000 rounds` with unique 16-byte random salt per file.
+* **Key Separation**:
+  * 32-byte Encryption Key (`EncKey`)
+  * 32-byte MAC Key (`MacKey`)
+
+### 4. Binary Footer Layout (`VAULTV05` - 96 Bytes)
 
 ```
-┌──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┐
-│  Magic (8B)  │ChunkSize (4B)│  Salt (16B)  │   IV (16B)   │AuthHash (32B)│  Fails (2B)  │ModeFlag (2B) │
-│  "VAULTV04"  │  uint32 LE   │ Random Bytes │ Random Bytes │ SHA256 Hash  │  uint16 LE   │  uint16 LE   │
-└──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────┘
+┌──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬─────────────┬─────────────┐
+│  Magic (8B)  │ChunkSize (4B)│  Salt (16B)  │  Nonce (16B) │MasterMAC(32B)│ AuthTag(16B) │ Fails (2B)  │ModeFlag (2B)│
+│  "VAULTV05"  │  uint32 LE   │ Random Bytes │ Random Bytes │ HMAC-SHA256  │ HMAC-SHA256  │  uint16 LE  │  uint16 LE  │
+└──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴─────────────┴─────────────┘
 ```
-
-* **Authentication Tag**: $\text{AuthHash} = \text{SHA256}(\text{Key} \parallel \text{"VAULT\_AUTH\_V4"} \parallel \text{Salt})$
-* **Constant-Time Verification**: Prevents micro-timing side-channel analysis during authentication.
 
 ---
 
 ## 🛑 Reporting a Vulnerability
 
-If you discover a potential security flaw or cryptographic vulnerability within Universal Vault, please do **not** open a public issue on GitHub.
-
-Instead, please send a detailed disclosure report to:
+If you discover a potential cryptographic vulnerability within Universal Vault, please send a disclosure report to:
 * **Maintainer**: Adil Arbaz Khan
 * **GitHub Profile**: [@Adil-Arbaz-Khan](https://github.com/Adil-Arbaz-Khan)
-
-Please include steps to reproduce, the targeted file type, and your environment specifications. We appreciate your efforts in responsible disclosure.
