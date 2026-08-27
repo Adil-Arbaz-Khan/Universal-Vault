@@ -67,6 +67,7 @@ Universal Vault V5.5 implements an **Authenticated Encryption with Associated Da
 2. **Browser Garbage Collection & RAM**: In `Vault_App.html`, typed arrays containing key bytes are immediately overwritten with zeros via `.fill(0)`. However, JavaScript engine garbage collectors (V8/SpiderMonkey) manage low-level heap memory dynamically. For high-security environments, close browser tabs after session completion or use the "Wipe RAM" button.
 3. **Filesystem Metadata**: The Encrypt-then-MAC tag authenticates 100% of the ciphertext file content. External filesystem metadata (e.g. filename, file modification timestamps) are managed by the host OS filesystem.
 4. **Endpoint Security**: The cryptographic suite assumes the host endpoint is free from active hardware keyloggers or compromised memory-scraping malware.
+5. **iOS (iPhone & iPad) Execution Model**: Unlike desktop and Android environments that support native command-line batch streaming, iOS enforces strict app sandboxing without terminal/shell access. On iOS, Universal Vault operates exclusively through the standalone client-side WebCrypto PWA (`Vault_App.html`) in Safari, executing entirely in volatile browser RAM with zero terminal dependencies or background filesystem hooks.
 
 ---
 

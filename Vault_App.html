@@ -303,6 +303,40 @@
   .alert-info { background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); color: #7dd3fc; }
   .alert-warning { background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); color: #fcd34d; }
 
+  .progress-wrap {
+    margin-top: 14px;
+    display: none;
+  }
+  .progress-wrap.active { display: block; }
+  .progress-track {
+    width: 100%;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #38bdf8, #10b981);
+    transition: width 0.12s linear;
+  }
+  .progress-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.78rem;
+    color: #94a3b8;
+    margin-top: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .progress-label {
+    font-size: 0.82rem;
+    color: #cbd5e1;
+    margin-bottom: 6px;
+  }
+
   .preview-wrapper {
     margin-top: 20px;
     border-radius: var(--radius-lg);
@@ -444,11 +478,21 @@
 
   <div id="toastAlert" class="toast-alert"></div>
 
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-label" id="progressLabel">Processing...</div>
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-meta">
+      <span id="progressStats">0 / 0 MB</span>
+      <span id="progressEta">ETA: --:--</span>
+    </div>
+  </div>
+
   <div class="preview-wrapper" id="previewWrapper"></div>
 </div>
 
 <script>
 const FOOTER_LEN_V5 = 96;
+const FOOTER_LEN_V5_RESUMABLE = 104;
 const FOOTER_LEN_V4 = 80;
 const FOOTER_LEN_V3 = 80;
 const FOOTER_LEN_V2 = 76;
@@ -552,17 +596,37 @@ async function updateFileUI(file) {
 
   document.getElementById("dropContent").innerHTML = `
     <div class="file-chip">
-      <span>${icon}</span>
-      <span>${file.name}</span>
+      <span id="dropIconSpan"></span>
+      <span id="dropNameSpan"></span>
     </div>
-    <div class="dropzone-subtitle" style="margin-top:4px;">${sizeMB} MB • V5 Authenticated Stream Ready</div>
+    <div class="dropzone-subtitle" style="margin-top:4px;" id="dropSubtitleSpan"></div>
   `;
+  document.getElementById("dropIconSpan").textContent = icon;
+  document.getElementById("dropNameSpan").textContent = file.name;
+  document.getElementById("dropSubtitleSpan").textContent = `${sizeMB} MB • V5 Authenticated Stream Ready`;
 
   const badge = document.getElementById("fileBadge");
   let isLocked = false;
   let modeName = "Encrypted";
+  let interruptedState = 0; // 0 = normal, 1 = lock in progress, 2 = unlock in progress
 
-  if (file.size >= FOOTER_LEN_V5) {
+  // Check the 104-byte resumable V5 footer FIRST (this is what tools/vault.py and
+  // header_vault.ps1 now write for every V5.5 lock, including fully completed ones).
+  if (file.size >= FOOTER_LEN_V5_RESUMABLE) {
+    const foot5r = new Uint8Array(await file.slice(file.size - FOOTER_LEN_V5_RESUMABLE, file.size).arrayBuffer());
+    const m = String.fromCharCode(...foot5r.slice(0, 8));
+    if (m === MAGIC_V5) {
+      isLocked = true;
+      const dv = new DataView(foot5r.buffer);
+      const state = dv.getUint16(102, true); // offset 92+8+2 = 102 within the 104-byte slice
+      interruptedState = state;
+      if (state === 1) modeName = "⚠️ V5 LOCK INTERRUPTED";
+      else if (state === 2) modeName = "⚠️ V5 UNLOCK INTERRUPTED";
+      else modeName = "🔒 V5 Full AEAD Armor";
+    }
+  }
+  // Fall back to the older fixed 96-byte V5 footer (legacy pre-resumable V5 files).
+  if (!isLocked && file.size >= FOOTER_LEN_V5) {
     const foot5 = new Uint8Array(await file.slice(file.size - FOOTER_LEN_V5, file.size).arrayBuffer());
     const m = String.fromCharCode(...foot5.slice(0, 8));
     if (m === MAGIC_V5) {
@@ -582,6 +646,9 @@ async function updateFileUI(file) {
   if (isLocked) {
     badge.className = "status-badge badge-locked";
     badge.innerHTML = modeName;
+    if (interruptedState !== 0) {
+      showToast("⚠️ <strong>This file has an interrupted operation</strong> (closed terminal, crash, or power loss mid lock/unlock). This web app can't safely resume it — use Lock.bat/Unlock.bat or vault.py on desktop to resume forward or roll back to the original.", "warning");
+    }
   } else {
     badge.className = "status-badge badge-unlocked";
     badge.innerHTML = "🔓 Unencrypted";
@@ -664,7 +731,23 @@ function renderMediaPreview(blob, filename) {
     box.style.padding = "24px";
     box.style.textAlign = "center";
     box.style.color = "var(--text-secondary)";
-    box.innerHTML = `<div style="font-size: 2rem; margin-bottom: 8px;">📦</div><strong>${filename}</strong><div style="font-size: 0.8rem; margin-top: 4px;">Verified in RAM. Click <strong>Unlock & Save</strong> to export.</div>`;
+    const iconDiv = document.createElement("div");
+    iconDiv.style.fontSize = "2rem";
+    iconDiv.style.marginBottom = "8px";
+    iconDiv.textContent = "📦";
+    const nameStrong = document.createElement("strong");
+    nameStrong.textContent = filename;
+    const subDiv = document.createElement("div");
+    subDiv.style.fontSize = "0.8rem";
+    subDiv.style.marginTop = "4px";
+    const subStrong = document.createElement("strong");
+    subStrong.textContent = "Unlock & Save";
+    subDiv.appendChild(document.createTextNode("Verified in RAM. Click "));
+    subDiv.appendChild(subStrong);
+    subDiv.appendChild(document.createTextNode(" to export."));
+    box.appendChild(iconDiv);
+    box.appendChild(nameStrong);
+    box.appendChild(subDiv);
     wrapper.appendChild(box);
   }
 
@@ -672,6 +755,88 @@ function renderMediaPreview(blob, filename) {
     clearMemoryAndPreview();
     showToast("🛡️ RAM Auto-Wiped for security after 3 minutes.", "info");
   }, 180000);
+}
+
+// ---- Progress bar helpers ----
+const PROGRESS_CHUNK = 4 * 1024 * 1024; // 4MB per chunk — matches desktop engine granularity closely enough for a smooth bar
+let progressStartTime = 0;
+
+function showProgress(label) {
+  const wrap = document.getElementById("progressWrap");
+  wrap.classList.add("active");
+  document.getElementById("progressLabel").textContent = label;
+  document.getElementById("progressFill").style.width = "0%";
+  document.getElementById("progressStats").textContent = "0 / 0 MB";
+  document.getElementById("progressEta").textContent = "ETA: --:--";
+  progressStartTime = performance.now();
+}
+
+function updateProgress(doneBytes, totalBytes) {
+  const pct = totalBytes > 0 ? Math.min(100, (doneBytes / totalBytes) * 100) : 0;
+  document.getElementById("progressFill").style.width = pct.toFixed(1) + "%";
+  const doneMb = (doneBytes / (1024 * 1024)).toFixed(1);
+  const totalMb = (totalBytes / (1024 * 1024)).toFixed(1);
+  document.getElementById("progressStats").textContent = `${doneMb} / ${totalMb} MB  •  ${pct.toFixed(1)}%`;
+
+  const elapsedS = (performance.now() - progressStartTime) / 1000;
+  if (doneBytes > 0 && elapsedS > 0.15) {
+    const bytesPerSec = doneBytes / elapsedS;
+    const remainingBytes = totalBytes - doneBytes;
+    const etaS = Math.max(0, remainingBytes / bytesPerSec);
+    document.getElementById("progressEta").textContent = "ETA: " + formatEta(etaS);
+  }
+}
+
+function formatEta(seconds) {
+  const s = Math.round(seconds);
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return hh > 0 ? `${pad(hh)}:${pad(mm)}:${pad(ss)}` : `${pad(mm)}:${pad(ss)}`;
+}
+
+function hideProgress() {
+  document.getElementById("progressWrap").classList.remove("active");
+}
+
+// Increment a 16-byte big-endian counter (matches WebCrypto AES-CTR / the desktop
+// engines' convention) by `blocks` 16-byte blocks.
+function incrementCounter(counter, blocks) {
+  const c = new Uint8Array(counter);
+  let carry = blocks;
+  for (let i = 15; i >= 0 && carry > 0; i--) {
+    const sum = c[i] + (carry % 256);
+    c[i] = sum & 0xff;
+    carry = Math.floor(carry / 256) + (sum > 0xff ? 1 : 0);
+  }
+  return c;
+}
+
+// Chunked AES-CTR encrypt/decrypt with progress reporting. AES-CTR is a stream
+// cipher applied independently per 16-byte block, so splitting the input into
+// PROGRESS_CHUNK-sized pieces and encrypting each with the correctly-advanced
+// counter gives byte-identical output to one giant subtle.encrypt/decrypt call —
+// this only changes *how* we call WebCrypto, not the ciphertext produced.
+async function ctrTransformChunked(aesKey, baseCounter, data, mode, onProgress) {
+  const total = data.length;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  while (offset < total) {
+    const end = Math.min(offset + PROGRESS_CHUNK, total);
+    const slice = data.subarray(offset, end);
+    const blockOffset = Math.floor(offset / 16); // offset is always chunk-aligned except the final slice, and PROGRESS_CHUNK is a multiple of 16
+    const chunkCounter = incrementCounter(baseCounter, blockOffset);
+    const resultBuf = mode === "encrypt"
+      ? await crypto.subtle.encrypt({ name: "AES-CTR", counter: chunkCounter, length: 128 }, aesKey, slice)
+      : await crypto.subtle.decrypt({ name: "AES-CTR", counter: chunkCounter, length: 128 }, aesKey, slice);
+    out.set(new Uint8Array(resultBuf), offset);
+    offset = end;
+    if (onProgress) onProgress(offset, total);
+    // Yield to the browser so the progress bar actually paints between chunks.
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  return out;
 }
 
 async function deriveKeysV5(password, salt) {
@@ -729,8 +894,20 @@ async function handleAction(action) {
       let version = 0;
       let footerBuf = null;
       let footerLen = 0;
+      let opState = 0;
 
-      if (fileSize >= FOOTER_LEN_V5) {
+      // Try the 104-byte resumable V5 footer first — this is the current format
+      // written by tools/vault.py and header_vault.ps1 for every V5.5 lock.
+      if (fileSize >= FOOTER_LEN_V5_RESUMABLE) {
+        const buf = new Uint8Array(await file.slice(fileSize - FOOTER_LEN_V5_RESUMABLE, fileSize).arrayBuffer());
+        const m = String.fromCharCode(...buf.slice(0, 8));
+        if (m === MAGIC_V5) {
+          version = 5; footerBuf = buf; footerLen = FOOTER_LEN_V5_RESUMABLE;
+          opState = new DataView(buf.buffer).getUint16(102, true);
+        }
+      }
+      // Fall back to the older fixed 96-byte V5 footer.
+      if (!version && fileSize >= FOOTER_LEN_V5) {
         const buf = new Uint8Array(await file.slice(fileSize - FOOTER_LEN_V5, fileSize).arrayBuffer());
         const m = String.fromCharCode(...buf.slice(0, 8));
         if (m === MAGIC_V5) { version = 5; footerBuf = buf; footerLen = FOOTER_LEN_V5; }
@@ -750,6 +927,12 @@ async function handleAction(action) {
           showToast("ℹ️ This file is already unlocked.", "info");
           return;
         }
+      }
+
+      if (opState !== 0) {
+        const which = opState === 1 ? "a LOCK" : "an UNLOCK";
+        showToast(`🛑 <strong>Interrupted operation detected</strong>: this file was left mid-way through ${which} (closed terminal, crash, or power loss). Opening it here would read torn/partial data. Please use Lock.bat / Unlock.bat / vault.py on desktop first — they can resume it forward or roll it back to the original safely.`, "error");
+        return;
       }
 
       const dataLen = fileSize - footerLen;
@@ -782,30 +965,42 @@ async function handleAction(action) {
 
         failedAttempts = 0;
 
-        // Ciphertext integrity verification (Anti-Tampering HMAC)
-        const cipherBlob = file.slice(0, dataLen);
-        const cipherBuf = new Uint8Array(await cipherBlob.arrayBuffer());
+        showProgress(`🔍 Verifying integrity — ${file.name}`);
+
+        // Ciphertext integrity verification (Anti-Tampering HMAC).
+        // WebCrypto's HMAC has no streaming API, so we read+concat in chunks
+        // (progress reflects the read) then sign once over the full buffer.
+        const cipherBuf = new Uint8Array(dataLen);
+        let readOff = 0;
+        while (readOff < dataLen) {
+          const end = Math.min(readOff + PROGRESS_CHUNK, dataLen);
+          const part = new Uint8Array(await file.slice(readOff, end).arrayBuffer());
+          cipherBuf.set(part, readOff);
+          readOff = end;
+          updateProgress(readOff, dataLen);
+          await new Promise((r) => setTimeout(r, 0));
+        }
         const computedMac = new Uint8Array(await crypto.subtle.sign("HMAC", cryptoInfo.hmacKey, cipherBuf));
 
         let macDiff = 0;
         for (let i = 0; i < 32; i++) macDiff |= (storedMac[i] ^ computedMac[i]);
 
         if (macDiff !== 0) {
+          hideProgress();
           showToast("❌ <strong>INTEGRITY CORRUPTION</strong>: Ciphertext was modified or corrupted! Decryption halted.", "error");
           return;
         }
 
-        // Authenticated Stream Decryption via AES-CTR
+        // Authenticated Stream Decryption via AES-CTR (chunked, with progress)
+        showProgress(`🔓 Decrypting — ${file.name}`);
         const aesKey = await crypto.subtle.importKey(
           "raw", cryptoInfo.encKeyBytes, { name: "AES-CTR" }, false, ["decrypt"]
         );
-        const decryptedBuf = await crypto.subtle.decrypt(
-          { name: "AES-CTR", counter: nonce, length: 128 },
-          aesKey, cipherBuf
-        );
+        const decryptedBuf = await ctrTransformChunked(aesKey, nonce, cipherBuf, "decrypt", updateProgress);
 
         cryptoInfo.encKeyBytes.fill(0);
         cryptoInfo.macKeyBytes.fill(0);
+        hideProgress();
 
         const restoredBlob = new Blob([decryptedBuf], { type: mime });
         const elapsed = (performance.now() - t0).toFixed(1);
@@ -824,30 +1019,45 @@ async function handleAction(action) {
       const nonce = crypto.getRandomValues(new Uint8Array(16));
       const cryptoInfo = await deriveKeysV5(password, salt);
 
-      const fileBuf = new Uint8Array(await file.arrayBuffer());
+      showProgress(`📖 Reading — ${file.name}`);
+      const totalSize = file.size;
+      const fileBuf = new Uint8Array(totalSize);
+      let readOff2 = 0;
+      while (readOff2 < totalSize) {
+        const end = Math.min(readOff2 + PROGRESS_CHUNK, totalSize);
+        const part = new Uint8Array(await file.slice(readOff2, end).arrayBuffer());
+        fileBuf.set(part, readOff2);
+        readOff2 = end;
+        updateProgress(readOff2, totalSize);
+        await new Promise((r) => setTimeout(r, 0));
+      }
 
-      // Encrypt 100% full file with AES-CTR
+      // Encrypt 100% full file with AES-CTR (chunked, with progress)
+      showProgress(`🔒 Encrypting — ${file.name}`);
       const aesKey = await crypto.subtle.importKey(
         "raw", cryptoInfo.encKeyBytes, { name: "AES-CTR" }, false, ["encrypt"]
       );
-      const cipherBuf = new Uint8Array(await crypto.subtle.encrypt(
-        { name: "AES-CTR", counter: nonce, length: 128 },
-        aesKey, fileBuf
-      ));
+      const cipherBuf = await ctrTransformChunked(aesKey, nonce, fileBuf, "encrypt", updateProgress);
 
       // Calculate master HMAC-SHA256 over ciphertext (Encrypt-then-MAC)
+      showProgress(`🛡️ Sealing — ${file.name}`);
       const masterMac = new Uint8Array(await crypto.subtle.sign("HMAC", cryptoInfo.hmacKey, cipherBuf));
+      hideProgress();
 
-      // Build V5 Footer (96 bytes)
-      const footer = new Uint8Array(FOOTER_LEN_V5);
+      // Build V5 Footer (104-byte resumable layout, matching tools/vault.py and
+      // header_vault.ps1). Browser locks complete atomically in one pass in memory,
+      // so this is always written already-finalized: checkpoint=0, fails=0,
+      // state=STATE_NORMAL_LOCKED(0).
+      const footer = new Uint8Array(FOOTER_LEN_V5_RESUMABLE);
       for (let i = 0; i < 8; i++) footer[i] = MAGIC_V5.charCodeAt(i);
       new DataView(footer.buffer).setUint32(8, 65536, true);
       footer.set(salt, 12);
       footer.set(nonce, 28);
       footer.set(masterMac, 44);
       footer.set(cryptoInfo.authTag, 76);
-      new DataView(footer.buffer).setUint16(92, 0, true);
-      new DataView(footer.buffer).setUint16(94, 1, true);
+      // bytes [92:100] checkpoint (uint64 LE) = 0 (already zero-initialized)
+      // bytes [100:102] fails (uint16 LE) = 0 (already zero-initialized)
+      new DataView(footer.buffer).setUint16(102, 0, true); // state = STATE_NORMAL_LOCKED
 
       cryptoInfo.encKeyBytes.fill(0);
       cryptoInfo.macKeyBytes.fill(0);
@@ -859,6 +1069,7 @@ async function handleAction(action) {
       showToast(`🔒 <strong>Locked in ${elapsed}ms!</strong> (100% Full-File AEAD + 600k PBKDF2).`, "success");
     }
   } catch (err) {
+    hideProgress();
     showToast("❌ <strong>Error</strong>: " + err.message, "error");
   }
 }

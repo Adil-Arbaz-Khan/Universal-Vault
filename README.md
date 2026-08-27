@@ -106,17 +106,21 @@ chmod +x lock.sh unlock.sh status.sh
 
 ---
 
-### 4. Android (via Termux)
-```bash
-pkg install python git -y
-git clone https://github.com/Adil-Arbaz-Khan/Universal-Vault.git
-cd Universal-Vault
-bash tools/setup_termux.sh
+### 4. Android (Mobile Web & Termux)
+* **Method 1 (Instant 1-Click)**: Open `Vault_App.html` in Chrome or Brave on Android to lock, unlock, or stream 4K videos in RAM with zero install.
+* **Method 2 (Termux Power Users)**:
+  ```bash
+  # 1. Grant storage permission & install python (one-time setup):
+  termux-setup-storage
+  pkg install python -y
 
-# Lock/Unlock any file on storage:
-./lock.sh /sdcard/Download/Private_Document.pdf
-./unlock.sh /sdcard/Download/Private_Document.pdf
-```
+  # 2. Navigate to where you extracted the tool:
+  cd ~/storage/downloads/Universal-Vault-v5.5-Android
+
+  # 3. Lock/Unlock any file or folder on your device:
+  python tools/vault.py lock /storage/emulated/0/Download/secret_file.pdf
+  python tools/vault.py unlock /storage/emulated/0/Download/secret_file.pdf
+  ```
 
 ---
 
