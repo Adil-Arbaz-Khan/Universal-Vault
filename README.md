@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🛡️ Universal Vault V5.5.1
+<img src="assets/logo.png" alt="Universal Vault Logo" width="160" style="border-radius: 28px; box-shadow: 0 10px 30px rgba(0,0,0,0.6);" />
+
+# 🛡️ Universal Vault V5.5.2
 
 **Lightweight Sovereign Authenticated Encryption Suite (AEAD)**  
 *Ultra-Lightweight (<3 MB) • Global Terminal-First CLI • 100% In-Place Streaming • Portable by Design*
@@ -8,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 [![Security: AES-256-CTR + HMAC-SHA256](https://img.shields.io/badge/Security-AES--256--CTR%20%2B%20HMAC--SHA256-10b981.svg?style=for-the-badge)](SECURITY.md)
 [![KDF: OWASP 600k](https://img.shields.io/badge/KDF-PBKDF2--600k%20Iters%20(OWASP)-38bdf8.svg?style=for-the-badge)](SECURITY.md)
-[![Platforms: Windows | Linux | macOS](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS-818cf8.svg?style=for-the-badge)](#-installation--setup-primary)
+[![Platforms: Windows | Linux | macOS | Android](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android-818cf8.svg?style=for-the-badge)](#-installation--setup-primary)
 [![Author](https://img.shields.io/badge/Author-Adil%20Arbaz%20Khan-f43f5e.svg?style=for-the-badge)](https://github.com/Adil-Arbaz-Khan)
 
 > **The Universal Vault Motto:**  
@@ -74,6 +76,13 @@ chmod +x install.sh
 ./install.sh
 ```
 *(Automatically detects native Apple Silicon M1/M2/M3/M4 or Intel, clears Gatekeeper quarantine flags, and registers `~/.local/bin` in `~/.zprofile` and `~/.zshrc`)*
+### 4. Android (Native App & Complete Suite)
+* **Option A: Standalone APK (Recommended)**:
+  1. Download **`UniversalVault-v5.5.2.apk`** from [Releases](https://github.com/Adil-Arbaz-Khan/Universal-Vault/releases/tag/v5.5.2).
+  2. Tap to install on your device (Android 8.0+ / API 26+ up to Android 15+).
+  3. Enjoy 100% in-place SAF streaming, hardware write barriers (`Os.fsync`), crash-safe resumption, and custom cybernetic dark obsidian theme.
+* **Option B: Merged Android Bundle**:
+  * Download **`Universal-Vault-v5.5.2-Android.zip`** for a complete all-in-one archive containing the native APK, the portable offline web viewer (`Vault_App.html`), and Termux CLI scripts (`setup_termux.sh`, `lock.sh`, `unlock.sh`).
 
 ---
 
@@ -145,7 +154,7 @@ vault status .
 *Example Output:*
 ```text
 ======================================================================
-  Universal Vault v5.5.1 (CLI Native): STATUS Operation
+  Universal Vault v5.5.2 (CLI Native): STATUS Operation
   Target Scope   : /data/projects
   Files Located  : 3
 ======================================================================
@@ -210,15 +219,16 @@ Leaves zero background services, zero registry clutter, and zero hidden files.
 
 Verify binary integrity against published provenance hashes:
 
-| Platform | Binary | SHA-256 Checksum |
+| Platform | Binary / Asset | SHA-256 Checksum |
 | :--- | :--- | :--- |
-| **Windows x86_64** | `vault.exe` | `dd55fb4af68e8ffed0c634416153cd67c9629691e3e4a08430cfe4ec0d755fa3` |
-| **Linux x86_64** | `vault_linux_amd64` | `999e93e8e98d51c7d80131e2abea80bc0d82193c336769f262c309528fa19f38` |
-| **Linux ARM64** | `vault_linux_arm64` | `a57dcf73e4afa19c9879d003527b042045687fecb9627e635af0a2e798686eb9` |
-| **macOS Apple Silicon** | `vault_darwin_arm64` | `498a12064c7823e4f9b067633a9e1aaa0148b619711af38e50ab29a4dd921eb1` |
-| **macOS Intel** | `vault_darwin_amd64` | `528466b7ef448d2f8e9907ff68c6d62fbca391bfeba4f5c7aca9cf6512549846` |
+| **Windows x86_64** | `vault.exe` | `b4ce2d3da7f6834d96bb8a3ea35389ccc8cd8b4bc0afdf515cb51b1230c00801` |
+| **Linux x86_64** | `vault_linux_amd64` | `b5831310c678003df21a71701dfeb5c2f125c1fd0f160c4c3da28cfb5efa218f` |
+| **Linux ARM64** | `vault_linux_arm64` | `d9edca2c9fa7ad31c9e72da24c4e9ffc3eb6672a8f932167ab44809bcb2a8321` |
+| **macOS Apple Silicon** | `vault_darwin_arm64` | `3fd7358e6b6dd80087e2325f102bbdf902c30d11f10c6ff8f77b5f6d38e8ce80` |
+| **macOS Intel** | `vault_darwin_amd64` | `a2923a5069ec3eebc439d87e4cc056f82f13400cc2cd8f3a44b74cd64456d84c` |
+| **Android Native APK** | `UniversalVault-v5.5.2.apk` | `6aa2ff6fea9d2b0982c5e7442f9892fe08177e3fcbe00f0cd27fc29c0f213d10` |
 
-*Full verification guide and release history: [RELEASE_NOTES_v5.5.1_CLI.md](RELEASE_NOTES_v5.5.1_CLI.md)*
+*Full verification guide and release history: [RELEASE_NOTES_v5.5.2.md](RELEASE_NOTES_v5.5.2.md)*
 
 ---
 

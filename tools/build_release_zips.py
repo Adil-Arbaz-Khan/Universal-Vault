@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Universal Vault v5.5.1 Release Packager
+Universal Vault v5.5.2 Release Packager
 Generates official release zip archives for Windows, Linux, macOS, Android, iOS, and Universal.
 """
 
@@ -10,7 +10,7 @@ import shutil
 import hashlib
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_DIR = os.path.join(ROOT_DIR, "releases_v5.5.1")
+OUT_DIR = os.path.join(ROOT_DIR, "releases_v5.5.2")
 
 if os.path.exists(OUT_DIR):
     shutil.rmtree(OUT_DIR)
@@ -44,7 +44,7 @@ def make_zip(zip_name, file_map, custom_files=None):
     return zip_name, file_hash
 
 print("======================================================================")
-print("  Packaging Universal Vault v5.5.1 Official Release Archives")
+print("  Packaging Universal Vault v5.5.2 Official Release Archives")
 print("======================================================================")
 
 packages = []
@@ -63,7 +63,7 @@ win_files = [
     (os.path.join(ROOT_DIR, "Vault_App.html"), "portable/Vault_App.html"),
     (os.path.join(ROOT_DIR, "LICENSE"), "LICENSE"),
 ]
-packages.append(make_zip("Universal-Vault-v5.5.1-Windows.zip", win_files))
+packages.append(make_zip("Universal-Vault-v5.5.2-Windows.zip", win_files))
 
 # 2. Linux Package
 linux_files = [
@@ -80,7 +80,7 @@ linux_files = [
     (os.path.join(ROOT_DIR, "Vault_App.html"), "portable/Vault_App.html"),
     (os.path.join(ROOT_DIR, "LICENSE"), "LICENSE"),
 ]
-packages.append(make_zip("Universal-Vault-v5.5.1-Linux.zip", linux_files))
+packages.append(make_zip("Universal-Vault-v5.5.2-Linux.zip", linux_files))
 
 # 3. macOS Package
 macos_files = [
@@ -97,10 +97,29 @@ macos_files = [
     (os.path.join(ROOT_DIR, "Vault_App.html"), "portable/Vault_App.html"),
     (os.path.join(ROOT_DIR, "LICENSE"), "LICENSE"),
 ]
-packages.append(make_zip("Universal-Vault-v5.5.1-macOS.zip", macos_files))
+packages.append(make_zip("Universal-Vault-v5.5.2-macOS.zip", macos_files))
 
-# 4. Android Package (Web PWA + Termux CLI)
+# 4. Android Package (Native APK + Web PWA + Termux CLI)
+android_readme = (
+    "Universal Vault v5.5.2 — Android Release\n"
+    "=========================================\n\n"
+    "1. NATIVE ANDROID APPLICATION (Recommended)\n"
+    "   File: UniversalVault-v5.5.2.apk\n"
+    "   - Install: Open this APK directly on your Android phone to install.\n"
+    "   - 100% in-place sovereign encryption via Storage Access Framework (SAF).\n"
+    "   - 600,000 PBKDF2-HMAC-SHA256 iterations (OWASP Gold Standard).\n"
+    "   - Hardware write barrier synchronization (Os.fsync) & crash resumption.\n"
+    "   - Live telemetry: speed (MB/s) and ETA countdown.\n\n"
+    "2. PORTABLE OFFLINE WEB APPLICATION\n"
+    "   File: Vault_App.html\n"
+    "   - Open in Chrome, Brave, Firefox, or Edge.\n"
+    "   - Stream encrypted 4K video, audio, and documents in RAM with zero disk writes.\n\n"
+    "3. TERMUX CLI SCRIPTS (Advanced)\n"
+    "   Run ./tools/setup_termux.sh, then lock.sh / unlock.sh / status.sh.\n"
+)
+
 android_files = [
+    (os.path.join(ROOT_DIR, "bin", "android", "UniversalVault-v5.5.2.apk"), "UniversalVault-v5.5.2.apk"),
     (os.path.join(ROOT_DIR, "Vault_App.html"), "Vault_App.html"),
     (os.path.join(ROOT_DIR, "lock.sh"), "lock.sh"),
     (os.path.join(ROOT_DIR, "unlock.sh"), "unlock.sh"),
@@ -110,14 +129,14 @@ android_files = [
     (os.path.join(ROOT_DIR, "LICENSE"), "LICENSE"),
     (os.path.join(ROOT_DIR, "SECURITY.md"), "SECURITY.md"),
 ]
-packages.append(make_zip("Universal-Vault-v5.5.1-Android.zip", android_files))
+packages.append(make_zip("Universal-Vault-v5.5.2-Android.zip", android_files, custom_files={"README.txt": android_readme}))
 
 # 5. iOS Package (PWA)
 ios_files = [
     (os.path.join(ROOT_DIR, "Vault_App.html"), "Vault_App.html"),
     (os.path.join(ROOT_DIR, "LICENSE"), "LICENSE"),
 ]
-packages.append(make_zip("Universal-Vault-v5.5.1-iOS.zip", ios_files))
+packages.append(make_zip("Universal-Vault-v5.5.2-iOS.zip", ios_files))
 
 # 6. Universal All-Platforms Package
 universal_files = [
@@ -125,7 +144,7 @@ universal_files = [
     (os.path.join(ROOT_DIR, "SECURITY.md"), "SECURITY.md"),
     (os.path.join(ROOT_DIR, "LICENSE"), "LICENSE"),
     (os.path.join(ROOT_DIR, "CONTRIBUTING.md"), "CONTRIBUTING.md"),
-    (os.path.join(ROOT_DIR, "RELEASE_NOTES_v5.5.1_CLI.md"), "RELEASE_NOTES_v5.5.1_CLI.md"),
+    (os.path.join(ROOT_DIR, "RELEASE_NOTES_v5.5.2.md"), "RELEASE_NOTES_v5.5.2.md"),
     (os.path.join(ROOT_DIR, "Vault_App.html"), "Vault_App.html"),
     (os.path.join(ROOT_DIR, "Lock.bat"), "Lock.bat"),
     (os.path.join(ROOT_DIR, "Unlock.bat"), "Unlock.bat"),
@@ -147,13 +166,24 @@ for folder in ["cmd", "bin", "installers", "Test_Samples"]:
                 rel_p = os.path.relpath(full_p, ROOT_DIR)
                 universal_files.append((full_p, rel_p))
 
-packages.append(make_zip("Universal-Vault-v5.5.1-Universal.zip", universal_files))
+packages.append(make_zip("Universal-Vault-v5.5.2-Universal.zip", universal_files))
+
+# Copy standalone Android APK to release directory
+apk_src = os.path.join(ROOT_DIR, "bin", "android", "UniversalVault-v5.5.2.apk")
+apk_dst = os.path.join(OUT_DIR, "UniversalVault-v5.5.2.apk")
+apk_hash = None
+if os.path.exists(apk_src):
+    shutil.copy2(apk_src, apk_dst)
+    apk_hash = sha256_file(apk_dst)
+    print(f"[+] Copied Standalone APK: UniversalVault-v5.5.2.apk | SHA256: {apk_hash[:16]}...")
 
 # Write SHA256SUMS.txt for the release packages
 sums_path = os.path.join(OUT_DIR, "SHA256SUMS.txt")
 with open(sums_path, "w", encoding="utf-8") as f:
     for name, h in packages:
         f.write(f"{h}  {name}\n")
+    if apk_hash:
+        f.write(f"{apk_hash}  UniversalVault-v5.5.2.apk\n")
 
 print("\n[+] Wrote release checksums to:", sums_path)
-print("All 6 packages created successfully in:", OUT_DIR)
+print("All release assets staged successfully in:", OUT_DIR)

@@ -1,10 +1,10 @@
-# Security Policy & Cryptographic Threat Model (V5.5.1)
+# Security Policy & Cryptographic Threat Model (V5.5.2)
 
 ## 🛡️ Supported Versions
 
 | Version | Status | Key Derivation (KDF) | Integrity / Authenticity | Payload Coverage | Fault Tolerance & Footer Format |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **V5.5.1 / V5.5+ (Native CLI)** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚡ **Crash-Safe Checkpointed (104-byte Resumable / Two-Way Rollback)** |
+| **V5.5.2 / V5.5+ (Native CLI & Android)** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚡ **Crash-Safe Checkpointed (104-byte Resumable / Two-Way Rollback)** |
 | **V5.0** | 🟢 Supported | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚠️ Static Sealed (96-byte Non-Resumable Footer) |
 | **V4.x** | 🟡 Deprecated (Migration Only) | PBKDF2-HMAC-SHA256 (100,000 iters) | ⚠️ Password AuthHash only (No payload MAC) | ⚠️ Hybrid (Full <50MB / Header) | ❌ Non-Resumable |
 | **V3.x - V1.x** | 🔴 End-of-Life | PBKDF2-HMAC-SHA256 (10k-100k iters) | ❌ None | ⚠️ Header-Only (64 KB) | ❌ Non-Resumable |
@@ -17,9 +17,9 @@
 
 ---
 
-## 🔒 Cryptographic Specifications (V5.5.1 Architecture)
+## 🔒 Cryptographic Specifications (V5.5.2 Architecture)
 
-Universal Vault V5.5.1 implements an **Authenticated Encryption with Associated Data (AEAD)** construction following the formal **Encrypt-then-MAC (EtM)** standard (ISO/IEC 18033-4):
+Universal Vault V5.5.2 implements an **Authenticated Encryption with Associated Data (AEAD)** construction following the formal **Encrypt-then-MAC (EtM)** standard (ISO/IEC 18033-4):
 
 ### 1. Zero-Dependency Native Core (Supply-Chain Immunity)
 * The primary CLI engine (`cmd/vault`) is built entirely using the **Go Standard Library** (`crypto/aes`, `crypto/cipher`, `crypto/hmac`, `crypto/sha256`, `crypto/rand`, `crypto/subtle`).

@@ -180,7 +180,7 @@ Universal Vault CLI is **100% byte-compatible** with all platforms and formats:
 
 | Format Version | Cipher & Mode | PBKDF2 Iterations | Trailer Length | Coverage | CLI Compatibility |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **V5.5.1 / V5.5** | `AES-256-CTR` + `HMAC-SHA256` | 600,000 iters | 104 Bytes | 100% Full-File AEAD | 🟢 **Native Lock, Unlock & Status** |
+| **V5.5.2 / V5.5+** | `AES-256-CTR` + `HMAC-SHA256` | 600,000 iters | 104 Bytes | 100% Full-File AEAD | 🟢 **Native Lock, Unlock & Status** |
 | **V5.0 Base** | `AES-256-CTR` + `HMAC-SHA256` | 600,000 iters | 96 Bytes | 100% Full-File AEAD | 🟢 **Native Unlock & Status** |
 | **V4.x Legacy** | `AES-256-CBC` (Key Auth) | 100,000 iters | 80 Bytes | Hybrid (<50MB Full/Header) | 🟡 **Unlock via Python Engine** |
 | **V1–V3 Legacy**| `AES-256-CBC` (Header) | 10,000–100,000 iters | 76–80 Bytes | Header-Only (64 KB) | 🟡 **Unlock via Python Engine** |

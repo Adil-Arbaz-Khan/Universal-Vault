@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	Version = "5.5.1"
+	Version = "5.5.2"
 
 	MagicV5 = "VAULTV05"
 	MagicV4 = "VAULTV04"
@@ -50,7 +50,7 @@ var excludedExts = map[string]bool{
 var excludedDirs = map[string]bool{
 	"tools": true, ".vault": true, ".git": true, "__pycache__": true,
 	"node_modules": true, ".vscode": true, ".idea": true, "cmd": true,
-	"bin": true, "installers": true, "releases_v5.5.1": true,
+	"bin": true, "installers": true, "releases_v5.5.1": true, "releases_v5.5.2": true, "android": true,
 }
 
 func pbkdf2SHA256(password []byte, salt []byte, iter int, keyLen int) []byte {
