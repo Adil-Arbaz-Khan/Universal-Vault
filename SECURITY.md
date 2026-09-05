@@ -1,10 +1,10 @@
-# Security Policy & Cryptographic Threat Model (V5.5)
+# Security Policy & Cryptographic Threat Model (V5.5.1)
 
 ## 🛡️ Supported Versions
 
 | Version | Status | Key Derivation (KDF) | Integrity / Authenticity | Payload Coverage | Fault Tolerance & Footer Format |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **V5.5+** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚡ **Crash-Safe Checkpointed (104-byte Resumable / Two-Way Rollback)** |
+| **V5.5.1 / V5.5+ (Native CLI)** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚡ **Crash-Safe Checkpointed (104-byte Resumable / Two-Way Rollback)** |
 | **V5.0** | 🟢 Supported | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚠️ Static Sealed (96-byte Non-Resumable Footer) |
 | **V4.x** | 🟡 Deprecated (Migration Only) | PBKDF2-HMAC-SHA256 (100,000 iters) | ⚠️ Password AuthHash only (No payload MAC) | ⚠️ Hybrid (Full <50MB / Header) | ❌ Non-Resumable |
 | **V3.x - V1.x** | 🔴 End-of-Life | PBKDF2-HMAC-SHA256 (10k-100k iters) | ❌ None | ⚠️ Header-Only (64 KB) | ❌ Non-Resumable |
@@ -17,34 +17,44 @@
 
 ---
 
-## 🔒 Cryptographic Specifications (V5.5 Specification)
+## 🔒 Cryptographic Specifications (V5.5.1 Architecture)
 
-Universal Vault V5.5 implements an **Authenticated Encryption with Associated Data (AEAD)** construction following the formal **Encrypt-then-MAC (EtM)** standard (ISO/IEC 18033-4):
+Universal Vault V5.5.1 implements an **Authenticated Encryption with Associated Data (AEAD)** construction following the formal **Encrypt-then-MAC (EtM)** standard (ISO/IEC 18033-4):
 
-### 1. Symmetric Cipher
+### 1. Zero-Dependency Native Core (Supply-Chain Immunity)
+* The primary CLI engine (`cmd/vault`) is built entirely using the **Go Standard Library** (`crypto/aes`, `crypto/cipher`, `crypto/hmac`, `crypto/sha256`, `crypto/rand`, `crypto/subtle`).
+* **Zero External Dependencies**: Statically compiled without third-party libraries, eliminating open-source supply chain attack vectors and dependency confusion risks.
+
+### 2. Symmetric Cipher
 * **Algorithm**: `AES-256-CTR` (NIST SP 800-38A).
 * **Streaming Block Architecture**: 64 KB block streaming preserves exact byte lengths, enabling 100% in-place transformation with **0% extra disk space**.
-* **Nonce / Counter**: 16 bytes of cryptographically secure pseudo-random entropy per file.
+* **Nonce / Counter**: 16 bytes of cryptographically secure pseudo-random entropy generated via OS CSPRNG (`crypto/rand` invoking Win32 `BCryptGenRandom` or Unix `getrandom(2)`/`getentropy(2)`).
 
-### 2. Authenticity & Anti-Tampering (Integrity)
-* **Master MAC**: `HMAC-SHA256` computed over the entire ciphertext payload.
+### 3. Authenticity & Anti-Tampering (Integrity)
+* **Master MAC**: `HMAC-SHA256` computed over 100% of the ciphertext payload.
 * **Malleability Immunity**: Bit-flipping and chosen-ciphertext attacks are mathematically neutralized; the decryption engine verifies the master HMAC tag before executing any plaintext transforms.
 
-### 3. Key Derivation & Master Splitting
+### 4. Key Derivation & Master Splitting
 * **Standard**: NIST SP 800-132 `PBKDF2-HMAC-SHA256`.
 * **Iterations**: `600,000 rounds` (OWASP 2026 Gold Standard) with unique 16-byte random salt per file.
-* **Key Separation**:
-  * 32-byte Encryption Key (`EncKey`)
-  * 32-byte MAC Key (`MacKey`)
+* **Key Separation**: 512 derived bits split into:
+  * 32-byte Encryption Key (`EncKey` for AES-CTR)
+  * 32-byte MAC Key (`MacKey` for HMAC-SHA256)
+* **Pre-Flight Authentication (`AuthTag`)**: $HMAC(\text{MacKey}, \text{"VAULT\_AUTH\_V5"} \parallel \text{Salt})[0..15]$ verified in constant-time (`crypto/subtle`) before beginning ciphertext reads.
 
-### 4. Fault-Tolerant Checkpointed Streaming (Crash Safety)
+### 5. Fault-Tolerant Checkpointed Streaming (Crash Safety)
 * **Periodic Checkpoints**: In-place progress is atomically flushed to a 64-bit progress offset in the footer during transformation.
+* **Hardware Write Barriers**: Flushes transformed blocks directly to physical NAND flash (`FlushFileBuffers` on Windows, `fsync(2)` on POSIX) before advancing checkpoint pointers.
 * **Automated Interruption Recovery**: If power fails or a user abruptly closes the process midway through a large multi-gigabyte file, the engine on next launch detects the exact byte offset and seamlessly resumes transformation from the safe checkpoint rather than leaving corrupted data.
 
-### 5. Binary Footer Layouts (`VAULTV05`)
+### 6. Silent Terminal Password Masking (Shoulder-Surfing Defense)
+* **Windows**: Directly queries Win32 Console API (`GetConsoleMode` / `SetConsoleMode`) and disables `ENABLE_ECHO_INPUT` (`0x0004`) during master password input.
+* **Linux / macOS**: Direct POSIX terminal mode (`stty -echo`) with signal exit traps (`EXIT`, `INT`, `TERM`) guarantees password keystrokes are never echoed to the terminal or leaked in command history.
+
+### 7. Binary Footer Layouts (`VAULTV05`)
 
 #### A. Resumable Checkpoint Layout (104 Bytes - Used In-Progress and Crash Recovery)
-```
+```text
 ┌──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬─────────────┬─────────────┐
 │  Magic (8B)  │ChunkSize (4B)│  Salt (16B)  │  Nonce (16B) │MasterMAC(32B)│ AuthTag(16B) │Checkpoint(8B)│ Fails (2B)  │StateFlag(2B)│
 │  "VAULTV05"  │  uint32 LE   │ Random Bytes │ Random Bytes │ HMAC-SHA256  │ HMAC-SHA256  │  uint64 LE   │  uint16 LE  │  uint16 LE  │
@@ -52,7 +62,7 @@ Universal Vault V5.5 implements an **Authenticated Encryption with Associated Da
 ```
 
 #### B. Sealed Base Layout (96 Bytes - Static Final Sealed Vaults)
-```
+```text
 ┌──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬─────────────┬─────────────┐
 │  Magic (8B)  │ChunkSize (4B)│  Salt (16B)  │  Nonce (16B) │MasterMAC(32B)│ AuthTag(16B) │ Fails (2B)  │ModeFlag (2B)│
 │  "VAULTV05"  │  uint32 LE   │ Random Bytes │ Random Bytes │ HMAC-SHA256  │ HMAC-SHA256  │  uint16 LE  │  uint16 LE  │
@@ -71,34 +81,12 @@ Universal Vault V5.5 implements an **Authenticated Encryption with Associated Da
 
 ---
 
-## 🛠️ V5.5 Hardening Changelog
+## 🛠️ Security & Hardening Highlights
 
-The following security, safety, and reliability hardening items were identified, engineered, and resolved during the V5.5 release pass:
-
-### 1. Symlink-Following During Bulk Traversal
-* **Risk in V5.0 and Earlier**: Both the Python and PowerShell engines could be tricked into encrypting or modifying files outside the intended target directory if an attacker planted a symlink or directory junction inside a folder being processed (e.g., extracted archive or synced cloud folder pointing to external system files).
-* **What Changed in V5.5**: Both engines now detect and skip symlinked files. Furthermore, recursive directory traversal was overhauled to check `ReparsePoint` and symlink status *before* descending into any subdirectory (using `dirs[:]` pre-order pruning in Python `os.walk` and an iterative stack walker in PowerShell). The initial PowerShell patch only filtered the flattened result after recursion had already entered junctions; V5.5 resolves this by excluding linked directories at discovery time.
-* **Why It Matters**: Prevents drive-by directory escaping attacks where encrypting a folder inadvertently modifies or corrupts sensitive files located elsewhere on the filesystem.
-
-### 2. Silent Data Corruption on Interrupted Operations
-* **Risk in V5.0 and Earlier**: Both engines transform files strictly in-place (one 64 KB chunk at a time) with zero temporary file overhead. However, prior to V5.5, there was no progress atomicity guarantee: if a process was terminated mid-operation (closed terminal window, power failure, OS reboot, or USB unplug), the file was left permanently corrupted in a hybrid state (part plaintext, part ciphertext) with no diagnostic information and no recovery path. This was highlighted by a real user report involving a 300 MB video interrupted during decryption on Windows.
-* **What Changed in V5.5**: Implemented a 104-byte fault-tolerant resumable footer format (`VAULTV05`) that continuously tracks progress via a 64-bit `CheckpointOffset` and operational state flags (`STATE_LOCK_IN_PROGRESS` / `STATE_UNLOCK_IN_PROGRESS`). An interrupted lock can be resumed forward (`lock`) or cleanly rolled back to 100% original plaintext (`unlock`), where the engine detects the exact ciphertext boundary and decrypts only the processed region. An interrupted unlock automatically resumes forward from its last checkpoint.
-* **Why It Matters**: Converts in-place failure modes from catastrophic, irreversible data loss into a deterministic, crash-safe, and resumable operation with 0% extra storage requirement.
-
-### 3. Checkpoint / Data Write-Ordering Race (Flash Storage Write Barrier)
-* **Risk Identified During V5.5 Hardening**: The initial implementation of the resumable checkpoint wrote transformed data and updated the checkpoint in separate file stream writes. On removable flash media (such as USB pendrives) with weak write-ordering guarantees or volatile hardware write caching, power loss could cause a checkpoint to hit disk before the corresponding data blocks were physically committed to NAND flash, resulting in re-encrypting or misaligning blocks on resume.
-* **What Changed in V5.5**: A strict two-phase physical write barrier was introduced. Transformed data blocks are flushed and hardware-synced to disk (`f.flush(); os.fsync(f.fileno())` in Python / `FileStream.Flush(true)` invoking Win32 `FlushFileBuffers` in .NET) *before* the checkpoint pointer is updated in the footer, which is itself flushed and synced immediately after. To eliminate fsync latency stalls on slow flash controllers, physical syncs are throttled to 1 MB progress intervals, bounding worst-case resume overhead to $\le 1\text{ MB}$ while guaranteeing strict write serialization.
-* **Why It Matters**: Eliminates write-reordering data corruption risks on cheap USB flash controllers and removable media during unexpected power loss.
-
-### 4. Partial-Footer Corruption on Early Interruption
-* **Risk Identified During V5.5 Hardening**: If an encryption operation was terminated during the initial 104-byte footer append (before any file data was transformed), trailing incomplete footer bytes remained at EOF, causing subsequent read-only status and lock/unlock commands to fail or misreport file state.
-* **What Changed in V5.5**: Added automatic magic-byte scanning to detect damaged/truncated footer remnants. To preserve idempotent read semantics, read-only diagnostic operations (`status`) never execute mutating truncations—they safely report `"unlocked (partial initial header detected - self-heals on lock)"` without raising stream permission errors. The actual self-healing truncate is deferred to `lock` or `unlock`, which open the file handle with write permissions.
-* **Why It Matters**: Ensures diagnostic status checks remain strictly read-only and never crash or produce misleading error reports when inspecting damaged media.
-
-### 5. Windows Engine Performance & Exposure Window Reduction
-* **Risk in V5.0 and Earlier**: The PowerShell engine previously executed AES-CTR block transforms via an interpreted script loop (~1–2 MB/s). For multi-hundred-megabyte or gigabyte files, this produced multi-minute processing delays that directly exacerbated user impatience and widened the operational window of vulnerability for accidental interruptions.
-* **What Changed in V5.5**: The PowerShell engine now dynamically JIT-compiles a high-performance native C# stream processor (`VaultFastCtr`) at launch, boosting native PowerShell throughput to **200+ MB/s**. Additionally, `Lock.bat` and `Unlock.bat` now automatically detect and prioritize the native C OpenSSL Python engine (**2.5+ GB/s**) when available on the host system.
-* **Why It Matters**: Reduces encryption/decryption time for a 300 MB file from ~4 minutes to **under 0.4 seconds**, virtually eliminating the exposure window for process interruption.
+* **Symlink Traversal Immunity**: Recursive folder traversal checks directory entry metadata and skips symbolic links (`os.ModeSymlink`) *before* descending, preventing drive-by directory escape attacks.
+* **Hardware Flash Synchronization**: Two-phase write barriers ensure that data blocks are physically committed to flash before advancing the checkpoint pointer, eliminating write-reordering data loss on USB flash drives.
+* **Idempotent Status Auditing**: Diagnostic `status` operations are strictly read-only and never mutate files or execute truncations on damaged media.
+* **Out-of-Band Provenance Verification**: Every released binary is accompanied by official cryptographic SHA-256 hashes published in `SHA256SUMS.txt` and GitHub Release Notes.
 
 ---
 

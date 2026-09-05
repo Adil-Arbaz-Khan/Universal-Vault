@@ -77,8 +77,8 @@ def format_eta(seconds):
     return f"{m:02d}:{s:02d}"
 
 def render_progress(filename, current_bytes, total_bytes, start_time, action_label="Processing"):
-    if total_bytes < 5 * 1024 * 1024:
-        return  # Skip progress bar for files smaller than 5 MB
+    if total_bytes < 512 * 1024:
+        return  # Skip progress bar for tiny files < 512 KB
     
     elapsed = max(0.001, time.time() - start_time)
     speed = current_bytes / elapsed  # bytes/sec
@@ -89,16 +89,22 @@ def render_progress(filename, current_bytes, total_bytes, start_time, action_lab
     eta_sec = rem_bytes / speed if speed > 0 else 0
     eta_str = format_eta(eta_sec)
     
-    bar_width = 24
+    bar_width = 20
     filled = int(bar_width * (percent / 100.0))
-    bar = ("#" * filled) + ("-" * (bar_width - filled))
+    bar = ("=" * filled) + ("-" * (bar_width - filled))
     
     curr_mb = current_bytes / (1024 * 1024)
     tot_mb = total_bytes / (1024 * 1024)
     
-    name_display = filename if len(filename) <= 20 else filename[:17] + "..."
-    line = f"\r  [{name_display}] [{bar}] {percent:5.1f}% | {curr_mb:6.1f}/{tot_mb:6.1f} MB | {speed_mb:5.1f} MB/s | ETA: {eta_str} "
+    name_display = filename if len(filename) <= 16 else filename[:13] + "..."
+    line = f"\r  [{action_label:12s}] [{name_display:16s}] [{bar}] {percent:5.1f}% | {curr_mb:6.1f}/{tot_mb:6.1f} MB | {speed_mb:5.1f} MB/s | ETA: {eta_str}"
+    if len(line) < 85:
+        line += " " * (85 - len(line))
     sys.stdout.write(line)
+    sys.stdout.flush()
+
+def clear_progress_line():
+    sys.stdout.write("\r" + " " * 85 + "\r")
     sys.stdout.flush()
 
 def derive_keys_v5(password, salt):
@@ -375,9 +381,7 @@ def lock_file_v5(filepath, password):
             f.seek(data_len + 92)
             f.write(struct.pack("<QHH", data_len, 0, STATE_NORMAL_LOCKED))
             sync_file_to_disk(f)
-
-            if size >= 5 * 1024 * 1024:
-                sys.stdout.write("\n")
+            clear_progress_line()
             return True, f"100% Full-File AEAD Resumable Armor ({data_len} bytes, 600k PBKDF2)"
     except Exception as e:
         return False, f"Error: {e}"
@@ -463,13 +467,16 @@ def unlock_file_v5(filepath, password):
                     f.seek(0)
                     hmac_verify = hmac.new(mac_key, digestmod=hashlib.sha256)
                     p = 0
+                    verify_t = time.time()
                     while p < data_len:
                         t = min(CHUNK_SIZE_V5, data_len - p)
                         hmac_verify.update(f.read(t))
                         p += t
+                        render_progress(fname, p, data_len, verify_t, "Verifying")
 
                     computed_mac = hmac_verify.digest()
                     if not hmac.compare_digest(stored_mac, computed_mac):
+                        clear_progress_line()
                         return False, "INTEGRITY ERROR: Ciphertext has been modified or corrupted! Decryption halted."
 
                     # Mark state as UnlockInProgress in footer with fsync
@@ -482,6 +489,7 @@ def unlock_file_v5(filepath, password):
                 pos = start_pos
                 block_idx = pos // CHUNK_SIZE_V5
                 last_sync_pos = pos
+                decrypt_t = time.time()
 
                 while pos < data_len:
                     take = min(CHUNK_SIZE_V5, data_len - pos)
@@ -506,15 +514,14 @@ def unlock_file_v5(filepath, password):
                             sync_file_to_disk(f)
                             last_sync_pos = pos
 
-                    render_progress(fname, pos, data_len, start_t, "Unlocking")
+                    render_progress(fname, pos, data_len, decrypt_t, "Decrypting")
 
                 # Safe atomic truncate on complete restoration
                 sync_file_to_disk(f)
                 f.truncate(data_len)
                 sync_file_to_disk(f)
 
-                if size >= 5 * 1024 * 1024:
-                    sys.stdout.write("\n")
+                clear_progress_line()
 
                 if start_pos > 0:
                     return True, f"Resumed & Fully Restored ({data_len} bytes, resumed from {start_pos/1024/1024:.2f} MB)"
@@ -654,11 +661,13 @@ def process_targets(action, path, password=None):
 
     for p in targets:
         rel = os.path.relpath(p, path) if os.path.isdir(path) else os.path.basename(p)
-        print(f"Processing: {rel}... ")
         if action == "lock":
             ok, msg = lock_file_v5(p, password)
         else:
             ok, msg = unlock_file_v5(p, password)
+
+        clear_progress_line()
+        print(f"Processing: {rel}... ", end="")
 
         if ok:
             print(f"[SUCCESS: {msg}]")

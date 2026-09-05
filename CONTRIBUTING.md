@@ -20,6 +20,10 @@ Thank you for your interest in improving **Universal Vault**! We welcome contrib
 2. Create a topic branch: `git checkout -b feature/my-new-feature`
 3. Ensure your code passes all cryptographic tests:
    ```bash
+   # Test Native Go CLI Engine
+   go test ./cmd/vault/...
+   powershell -File cmd/vault/build.ps1
+
    # Test PowerShell Engine
    powershell -File tools/header_vault.ps1 -Action Lock -Path Test_Samples -Password "testpass"
    powershell -File tools/header_vault.ps1 -Action Unlock -Path Test_Samples -Password "testpass"
@@ -35,12 +39,13 @@ Thank you for your interest in improving **Universal Vault**! We welcome contrib
 
 ## 📐 Code Style & Guidelines
 
-* **Zero External Dependencies**: Keep core PowerShell and Python scripts functional using standard built-in libraries where possible (with graceful fallbacks for `cryptography` / `pycryptodome`).
+* **Zero External Dependencies**: The native CLI (`cmd/vault`) relies exclusively on the Go standard library (`crypto/*`). Core PowerShell and Python tools remain functional using standard built-in libraries.
 * **Cross-Platform Parity**: Any changes made to the `VAULTV05` binary specification must be implemented simultaneously across:
-  1. `tools/header_vault.ps1` (PowerShell .NET)
-  2. `tools/vault.py` (Python 3.8+)
-  3. `Vault_App.html` (WebCrypto & Pure JS)
-  4. Batch & Shell wrapper scripts
+  1. `cmd/vault/` (Go Native CLI)
+  2. `tools/header_vault.ps1` (PowerShell .NET)
+  3. `tools/vault.py` (Python 3.8+)
+  4. `Vault_App.html` (WebCrypto & Pure JS)
+  5. Batch & Shell wrapper scripts
 * **Footer Format Variants**: The `VAULTV05` specification includes two valid footer lengths:
   * **104-byte Resumable Footer**: Used during active in-progress lock/unlock operations to record physical byte checkpoints and state flags for crash recovery.
   * **96-byte Sealed Base Footer**: Used for static, completed sealed vaults.  
