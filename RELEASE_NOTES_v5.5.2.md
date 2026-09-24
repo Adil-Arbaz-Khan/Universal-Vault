@@ -15,7 +15,7 @@ Universal Vault **v5.5.2** delivers our first **Native Android APK**, introducin
 * **Live Telemetry & UI**: Glassmorphic dark obsidian theme (`#06090F`), electric cyan accents (`#38BDF8`), and real-time telemetry tracking PBKDF2 computation, HMAC validation, throughput (MB/s), and countdown ETA.
 
 ### 2. 🎨 Custom Cybernetic Branding & Adaptive Icon Suite
-* **Bespoke Logo**: High-resolution neon-cyan and electric-blue shield with an illuminated lock and circuit accents set against deep obsidian.
+* **Bespoke Logo**: Modern frosted-glass document design with a glowing electric-blue padlock embodying air-gapped sovereign encryption.
 * **Adaptive Android Icons**: Full mipmap density suite (`mdpi`, `hdpi`, `xhdpi`, `xxhdpi`, `xxxhdpi`) with adaptive foregrounds and `#06090F` background.
 
 ### 3. 📦 Merged Android Release Bundle (`Universal-Vault-v5.5.2-Android.zip`)
@@ -42,7 +42,7 @@ a2923a5069ec3eebc439d87e4cc056f82f13400cc2cd8f3a44b74cd64456d84c  vault_darwin_a
 
 ### Standalone Android APK:
 ```text
-6aa2ff6fea9d2b0982c5e7442f9892fe08177e3fcbe00f0cd27fc29c0f213d10  UniversalVault-v5.5.2.apk
+83b5d0e4a45d0fd749164a25b8f54cdae8adc586fc8d26c094b0c33d651a2472  UniversalVault-v5.5.2.apk
 ```
 
 ---
