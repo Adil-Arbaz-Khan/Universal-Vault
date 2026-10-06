@@ -3,6 +3,8 @@
 **Enterprise-Grade In-Place Authenticated Encryption Suite (AEAD)**  
 *Terminal-First Native CLI • Zero-Install Footprint • 100% In-Place Streaming • Crash-Safe Checkpointed*
 
+> **Official Website & Live WebApp**: [https://universal-vault.pages.dev/](https://universal-vault.pages.dev/)
+
 ---
 
 ## 📖 Table of Contents
@@ -57,7 +59,7 @@ Universal Vault CLI installs as a standalone global terminal command usable from
    ```
    *Output:*
    ```text
-   Universal Vault CLI v5.5.2 (Go Native Architecture)
+   Universal Vault CLI v5.5.21 (Go Native Architecture)
    ```
 
 ---
@@ -122,7 +124,7 @@ vault status "/Users/yourname/Projects/SecretProject"
 *Example Output:*
 ```text
 ======================================================================
-  Universal Vault v5.5.2 (CLI Native): STATUS Operation
+  Universal Vault v5.5.21 (CLI Native): STATUS Operation
   Target Scope   : /Users/yourname/Projects/SecretProject
   Files Located  : 3
 ======================================================================

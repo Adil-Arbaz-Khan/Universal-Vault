@@ -2,17 +2,19 @@
 
 <img src="assets/logo.png" alt="Universal Vault Logo" width="160" style="border-radius: 28px; box-shadow: 0 10px 30px rgba(0,0,0,0.6);" />
 
-# 🛡️ Universal Vault V5.5.2
+# 🛡️ Universal Vault V5.5.21
 
 **Lightweight Sovereign Authenticated Encryption Suite (AEAD)**  
 *Ultra-Lightweight (<3 MB) • Global Terminal-First CLI • 100% In-Place Streaming • Portable by Design*
 
+[![Website: universal-vault.pages.dev](https://img.shields.io/badge/Website-universal--vault.pages.dev-0070f3.svg?style=for-the-badge)](https://universal-vault.pages.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 [![Security: AES-256-CTR + HMAC-SHA256](https://img.shields.io/badge/Security-AES--256--CTR%20%2B%20HMAC--SHA256-10b981.svg?style=for-the-badge)](SECURITY.md)
 [![KDF: OWASP 600k](https://img.shields.io/badge/KDF-PBKDF2--600k%20Iters%20(OWASP)-38bdf8.svg?style=for-the-badge)](SECURITY.md)
-[![Platforms: Windows | Linux | macOS | Android](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android-818cf8.svg?style=for-the-badge)](#-installation--setup-primary)
+[![Platforms: Windows | Linux | macOS | Android | iOS](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android%20%7C%20iOS-818cf8.svg?style=for-the-badge)](#-installation--setup-primary)
 [![Author](https://img.shields.io/badge/Author-Adil%20Arbaz%20Khan-f43f5e.svg?style=for-the-badge)](https://github.com/Adil-Arbaz-Khan)
 
+> **Official Website & Live WebApp:** [https://universal-vault.pages.dev/](https://universal-vault.pages.dev/)  
 > **The Universal Vault Motto:**  
 > **Featherweight footprint. High-performance terminal CLI as primary. 100% portable when you need it.**
 
@@ -78,11 +80,11 @@ chmod +x install.sh
 *(Automatically detects native Apple Silicon M1/M2/M3/M4 or Intel, clears Gatekeeper quarantine flags, and registers `~/.local/bin` in `~/.zprofile` and `~/.zshrc`)*
 ### 4. Android (Native App & Complete Suite)
 * **Option A: Standalone APK (Recommended)**:
-  1. Download **`UniversalVault-v5.5.2.apk`** from [Releases](https://github.com/Adil-Arbaz-Khan/Universal-Vault/releases/tag/v5.5.2).
+  1. Download **`UniversalVault-v5.5.21.apk`** from [Releases](https://github.com/Adil-Arbaz-Khan/Universal-Vault/releases/tag/v5.5.21) or [universal-vault.pages.dev](https://universal-vault.pages.dev/).
   2. Tap to install on your device (Android 8.0+ / API 26+ up to Android 15+).
-  3. Enjoy 100% in-place SAF streaming, hardware write barriers (`Os.fsync`), crash-safe resumption, and custom cybernetic dark obsidian theme.
+  3. Enjoy 100% in-place SAF streaming, hardware write barriers (`Os.fsync`), crash-safe resumption, real-time password strength meter, and custom cybernetic dark obsidian theme.
 * **Option B: Merged Android Bundle**:
-  * Download **`Universal-Vault-v5.5.2-Android.zip`** for a complete all-in-one archive containing the native APK, the portable offline web viewer (`Vault_App.html`), and Termux CLI scripts (`setup_termux.sh`, `lock.sh`, `unlock.sh`).
+  * Download **`Universal-Vault-v5.5.21-Android.zip`** for a complete all-in-one archive containing the native APK, the portable offline web viewer (`Vault_App.html`), and Termux CLI scripts (`setup_termux.sh`, `lock.sh`, `unlock.sh`).
 
 ---
 
@@ -106,8 +108,53 @@ If you prefer a zero-footprint workflow without adding anything to your system P
   ./status.sh /path/to/files
   ```
 * **Offline Browser App (`Vault_App.html`)**:
-  * Double-click **`Vault_App.html`** in any browser (Chrome, Brave, Safari, Edge, Firefox) on desktop or mobile.
+  * Double-click **`Vault_App.html`** in any modern web browser (Chrome, Brave, Safari, Edge, Firefox) on desktop or mobile.
+  * Also accessible online at [https://universal-vault.pages.dev/app/](https://universal-vault.pages.dev/app/).
   * Encrypt, decrypt, or stream 4K videos/audio **directly in volatile RAM** with zero disk writes.
+
+---
+
+## 🌐 Air-Gapped Web Application Architecture (How `Vault_App.html` Works)
+
+Universal Vault features a standalone, fully self-contained single-file Web Application — **`Vault_App.html`** (hosted live at [https://universal-vault.pages.dev/app/](https://universal-vault.pages.dev/app/)).
+
+Designed for environments where software installation is restricted or zero-trace operations are mandatory, it brings the cryptographic power of the native CLI to any browser:
+
+### 1. 100% Client-Side WebCrypto Engine (Zero Server Interactions)
+* Operates strictly within the client browser using the W3C **Web Cryptography API** (`window.crypto.subtle`).
+* **Zero Server Dependency**: No passwords, keys, or file bytes are ever uploaded to any server or cloud API. All operations execute locally inside your browser's execution thread.
+* **Air-Gapped & Offline Ready**: Save the HTML file to a USB drive and open it on an air-gapped machine with no internet connection — it works completely offline without degrading functionality.
+
+### 2. Strict Content Security Policy (Zero Data Exfiltration)
+* Hardened with a zero-trust Content Security Policy (CSP):
+  ```http
+  default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; media-src blob:; frame-src blob:; object-src blob:;
+  ```
+* Bards any external HTTP/HTTPS network calls, web sockets, beacons, or third-party analytics. Zero telemetry, zero CDNs, zero tracking. All styling, SVG icons, and scripts are 100% embedded in a single file.
+
+### 3. Bit-for-Bit Format Parity with Native CLI (`VAULTV05`)
+* **Key Derivation (KDF)**: Derives 512 bits using `PBKDF2-HMAC-SHA256` with **600,000 iterations** (OWASP 2026 Recommended Work Factor) and unique 16-byte random salts.
+* **Key Separation**: Splits derived bits into a 32-byte `EncKey` (AES) and a 32-byte `MacKey` (HMAC).
+* **Pre-Flight Authentication**: Computes and validates a 16-byte `AuthTag` in constant time before proceeding with heavy payload decoding.
+* **Encrypt-then-MAC (EtM)**: Verifies the full-file 32-byte `MasterMAC` (HMAC-SHA256) over 100% of the ciphertext before emitting any decrypted data.
+* **Symmetric Cipher**: In-memory chunked streaming (4 MB RAM chunks) using `AES-256-CTR` preserving exact byte lengths (0% storage overhead).
+
+### 4. Volatile RAM Streaming Player (Zero Disk Forensics)
+* **Ephemeral In-Memory Playback**: Decrypted videos (including 4K MP4/WebM), audio files (MP3/WAV/FLAC), PDFs, high-resolution images, and text notes are converted into memory-resident `Blob` objects.
+* **No Temporary Disk Footprint**: Bypasses the filesystem entirely using transient in-memory Object URLs (`URL.createObjectURL(blob)`). No unencrypted fragments ever touch the operating system's temporary directory or swap disk.
+* **Explicit Memory Sanitization**: Derived keys and working typed arrays are actively zeroized in memory via `.fill(0)`. A dedicated **"Wipe RAM"** button allows users to immediately purge memory buffers and revoke Object URLs.
+
+### 5. Real-Time Shannon Password Entropy Meter
+* Evaluates password strength dynamically as the user types using mathematical Shannon entropy based on charset pool size ($N$) and password length ($L$): $E = L \log_2(N)$.
+* Instant visual feedback:
+  * 🔴 **Weak** (<40 bits) — Red indicator
+  * 🟡 **Moderate** (40–60 bits) — Amber indicator
+  * 🔵 **Strong** (60–80 bits) — Blue indicator
+  * 🟢 **High-Assurance** (80+ bits) — Emerald indicator
+
+### 6. Modern Cybernetic UI, Themes & Mobile Optimization
+* **Dark / Light Mode**: Cybernetic dark obsidian (`#06090f`) and clean light mode (`#fafafa`), with toggle persisted to `localStorage` and synchronized with OS preferences.
+* **Responsive Mobile Experience**: Dedicated mobile touch targets, optimized keyboard handling, and responsive compact footer tailored for smartphone screens.
 
 ---
 
@@ -154,7 +201,7 @@ vault status .
 *Example Output:*
 ```text
 ======================================================================
-  Universal Vault v5.5.2 (CLI Native): STATUS Operation
+  Universal Vault v5.5.21 (CLI Native): STATUS Operation
   Target Scope   : /data/projects
   Files Located  : 3
 ======================================================================
@@ -226,9 +273,9 @@ Verify binary integrity against published provenance hashes:
 | **Linux ARM64** | `vault_linux_arm64` | `d9edca2c9fa7ad31c9e72da24c4e9ffc3eb6672a8f932167ab44809bcb2a8321` |
 | **macOS Apple Silicon** | `vault_darwin_arm64` | `3fd7358e6b6dd80087e2325f102bbdf902c30d11f10c6ff8f77b5f6d38e8ce80` |
 | **macOS Intel** | `vault_darwin_amd64` | `a2923a5069ec3eebc439d87e4cc056f82f13400cc2cd8f3a44b74cd64456d84c` |
-| **Android Native APK** | `UniversalVault-v5.5.2.apk` | `6aa2ff6fea9d2b0982c5e7442f9892fe08177e3fcbe00f0cd27fc29c0f213d10` |
+| **Android Native APK** | `UniversalVault-v5.5.21.apk` | `a491cfb5208668351562afdcd0493e991f03c3fa1ecbdaeafc8ffdcd68d26ff9` |
 
-*Full verification guide and release history: [RELEASE_NOTES_v5.5.2.md](RELEASE_NOTES_v5.5.2.md)*
+*Full verification guide and release history: [RELEASE_NOTES_v5.5.21.md](RELEASE_NOTES_v5.5.21.md)*
 
 ---
 

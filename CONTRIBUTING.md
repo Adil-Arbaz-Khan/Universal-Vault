@@ -1,5 +1,7 @@
 # Contributing to Universal Vault
 
+> **Official Website & Documentation**: [https://universal-vault.pages.dev/](https://universal-vault.pages.dev/)
+
 Thank you for your interest in improving **Universal Vault**! We welcome contributions from developers, security researchers, and designers worldwide.
 
 ---
