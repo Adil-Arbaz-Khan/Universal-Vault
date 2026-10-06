@@ -41,11 +41,11 @@ a491cfb5208668351562afdcd0493e991f03c3fa1ecbdaeafc8ffdcd68d26ff9  UniversalVault
 
 ### Native CLI Binaries:
 ```text
-b4ce2d3da7f6834d96bb8a3ea35389ccc8cd8b4bc0afdf515cb51b1230c00801  vault.exe (Windows x86_64)
-b5831310c678003df21a71701dfeb5c2f125c1fd0f160c4c3da28cfb5efa218f  vault_linux_amd64 (Linux x86_64)
-d9edca2c9fa7ad31c9e72da24c4e9ffc3eb6672a8f932167ab44809bcb2a8321  vault_linux_arm64 (Linux ARM64)
-3fd7358e6b6dd80087e2325f102bbdf902c30d11f10c6ff8f77b5f6d38e8ce80  vault_darwin_arm64 (macOS Apple Silicon)
-a2923a5069ec3eebc439d87e4cc056f82f13400cc2cd8f3a44b74cd64456d84c  vault_darwin_amd64 (macOS Intel)
+073d7e91b8567cbd7abfd72d88dd27179f4af14f3c4dfb56baf15b1513bf62c5  vault.exe (Windows x86_64)
+6a23493fcfaae62124261ca198214f8d14a6e991e6f29ed2e42acbacf94bc507  vault_linux_amd64 (Linux x86_64)
+5fc97d7b6ff360b877109973279b20ddf8e4dea1088883a77aa5e57cb9cde418  vault_linux_arm64 (Linux ARM64)
+ab276353a3bebc347aced81fc5129a9cfe0fb619a9ed63544df3c831d5852c2d  vault_darwin_arm64 (macOS Apple Silicon)
+c2dcfb966321bc6380db372682c337e9480d41695167ee01b38ddc2f69237d20  vault_darwin_amd64 (macOS Intel)
 ```
 
 ---

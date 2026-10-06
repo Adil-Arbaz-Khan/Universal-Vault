@@ -36,21 +36,33 @@ try {
     Write-Host "[*] Building Linux AMD64 & ARM64 binaries..." -ForegroundColor Yellow
     $env:GOOS = "linux"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
     & $goExe build -ldflags="-s -w" -o (Join-Path $binDir "linux_amd64/vault") .
-    if ($LASTEXITCODE -eq 0) { Write-Host "[+] Created: bin/linux_amd64/vault" -ForegroundColor Green }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[+] Created: bin/linux_amd64/vault" -ForegroundColor Green
+        Copy-Item (Join-Path $binDir "linux_amd64/vault") (Join-Path $rootDir "installers\linux\vault_linux_amd64") -Force
+    }
 
     $env:GOOS = "linux"; $env:GOARCH = "arm64"; $env:CGO_ENABLED = "0"
     & $goExe build -ldflags="-s -w" -o (Join-Path $binDir "linux_arm64/vault") .
-    if ($LASTEXITCODE -eq 0) { Write-Host "[+] Created: bin/linux_arm64/vault" -ForegroundColor Green }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[+] Created: bin/linux_arm64/vault" -ForegroundColor Green
+        Copy-Item (Join-Path $binDir "linux_arm64/vault") (Join-Path $rootDir "installers\linux\vault_linux_arm64") -Force
+    }
 
     # 3. macOS Intel & Apple Silicon
     Write-Host "[*] Building macOS AMD64 & ARM64 (Apple Silicon) binaries..." -ForegroundColor Yellow
     $env:GOOS = "darwin"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
     & $goExe build -ldflags="-s -w" -o (Join-Path $binDir "darwin_amd64/vault") .
-    if ($LASTEXITCODE -eq 0) { Write-Host "[+] Created: bin/darwin_amd64/vault" -ForegroundColor Green }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[+] Created: bin/darwin_amd64/vault" -ForegroundColor Green
+        Copy-Item (Join-Path $binDir "darwin_amd64/vault") (Join-Path $rootDir "installers\macos\vault_darwin_amd64") -Force
+    }
 
     $env:GOOS = "darwin"; $env:GOARCH = "arm64"; $env:CGO_ENABLED = "0"
     & $goExe build -ldflags="-s -w" -o (Join-Path $binDir "darwin_arm64/vault") .
-    if ($LASTEXITCODE -eq 0) { Write-Host "[+] Created: bin/darwin_arm64/vault" -ForegroundColor Green }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[+] Created: bin/darwin_arm64/vault" -ForegroundColor Green
+        Copy-Item (Join-Path $binDir "darwin_arm64/vault") (Join-Path $rootDir "installers\macos\vault_darwin_arm64") -Force
+    }
 
     Write-Host "`nAll CLI binaries compiled successfully!" -ForegroundColor Green
 } finally {
