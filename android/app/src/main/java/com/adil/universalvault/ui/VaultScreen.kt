@@ -4,6 +4,9 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -35,10 +39,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.res.painterResource
 import com.adil.universalvault.R
 import com.adil.universalvault.crypto.VaultEngine
 import com.adil.universalvault.ui.theme.*
+import kotlin.math.log2
+import kotlin.math.roundToInt
 
 data class SelectedFileInfo(
     val uri: Uri,
@@ -56,12 +61,69 @@ data class ProgressState(
     val etaSeconds: Long = 0L
 )
 
+data class PasswordStrength(
+    val bits: Int,
+    val percentage: Float,
+    val label: String,
+    val color: Color
+)
+
+fun calculatePasswordStrength(password: String): PasswordStrength {
+    if (password.isEmpty()) {
+        return PasswordStrength(
+            bits = 0,
+            percentage = 0f,
+            label = "Entropy: empty",
+            color = Color(0xFF64748B)
+        )
+    }
+
+    var pool = 0
+    if (password.any { it.isLowerCase() }) pool += 26
+    if (password.any { it.isUpperCase() }) pool += 26
+    if (password.any { it.isDigit() }) pool += 10
+    if (password.any { !it.isLetterOrDigit() }) pool += 32
+
+    val poolSize = kotlin.math.max(pool, 2)
+    val bits = (password.length * log2(poolSize.toDouble())).roundToInt()
+    val pct = (bits / 128f).coerceIn(0f, 1f)
+
+    return when {
+        bits < 45 -> PasswordStrength(
+            bits = bits,
+            percentage = kotlin.math.max(pct, 0.08f),
+            label = "Weak (~$bits bits)",
+            color = Color(0xFFEB367F)
+        )
+        bits < 75 -> PasswordStrength(
+            bits = bits,
+            percentage = pct,
+            label = "Moderate (~$bits bits)",
+            color = Color(0xFFF5A623)
+        )
+        bits < 100 -> PasswordStrength(
+            bits = bits,
+            percentage = pct,
+            label = "Strong (~$bits bits)",
+            color = Color(0xFF0070F3)
+        )
+        else -> PasswordStrength(
+            bits = bits,
+            percentage = pct,
+            label = "High-Assurance (~$bits bits)",
+            color = Color(0xFF10B981)
+        )
+    }
+}
+
 @Composable
 fun VaultScreen(
     selectedFile: SelectedFileInfo?,
     progress: ProgressState,
     resultMessage: String?,
     isError: Boolean,
+    isDarkTheme: Boolean,
+    onToggleTheme: () -> Unit,
     onFileSelected: (Uri) -> Unit,
     onLockClicked: (String) -> Unit,
     onUnlockClicked: (String) -> Unit,
@@ -70,6 +132,7 @@ fun VaultScreen(
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+    val vaultColors = LocalVaultColors.current
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -78,7 +141,7 @@ fun VaultScreen(
     }
 
     Scaffold(
-        containerColor = BgMidnight
+        containerColor = vaultColors.background
     ) { padding ->
         Column(
             modifier = Modifier
@@ -88,7 +151,7 @@ fun VaultScreen(
                 .padding(horizontal = 20.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 1. Sleek Brand Header
+            // 1. Sleek Brand Header with Dark/Light Toggle & Version Pill
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -108,32 +171,58 @@ fun VaultScreen(
                     Column {
                         Text(
                             text = "UNIVERSAL VAULT",
-                            color = TextPrimary,
+                            color = vaultColors.textPrimary,
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp
                         )
                         Text(
                             text = "Sovereign In-Place AEAD",
-                            color = TextSecondary,
+                            color = vaultColors.textSecondary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
                         )
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = SurfaceElevated,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, SurfaceBorder)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "v5.5.2",
-                        color = AccentCyan,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
+                    // Dark / Light Theme Toggle Button
+                    Surface(
+                        shape = CircleShape,
+                        color = vaultColors.surfaceElevated,
+                        border = BorderStroke(1.dp, vaultColors.surfaceBorder),
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onToggleTheme)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                                contentDescription = if (isDarkTheme) "Switch to Light Mode" else "Switch to Dark Mode",
+                                tint = if (isDarkTheme) Color(0xFFF5A623) else Color(0xFF475569),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    // Version Pill v5.5.21
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = vaultColors.surfaceElevated,
+                        border = BorderStroke(1.dp, vaultColors.surfaceBorder)
+                    ) {
+                        Text(
+                            text = "v5.5.21",
+                            color = vaultColors.accentCyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
                 }
             }
 
@@ -142,11 +231,15 @@ fun VaultScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(20.dp))
-                    .border(1.dp, if (selectedFile != null) AccentCyan.copy(alpha = 0.3f) else SurfaceBorder, RoundedCornerShape(20.dp))
+                    .border(
+                        1.dp,
+                        if (selectedFile != null) vaultColors.accentCyan.copy(alpha = 0.3f) else vaultColors.surfaceBorder,
+                        RoundedCornerShape(20.dp)
+                    )
                     .clickable(enabled = !progress.isRunning) {
                         filePicker.launch(arrayOf("*/*"))
                     },
-                colors = CardDefaults.cardColors(containerColor = SurfaceObsidian)
+                colors = CardDefaults.cardColors(containerColor = vaultColors.surface)
             ) {
                 if (selectedFile == null) {
                     Column(
@@ -159,27 +252,27 @@ fun VaultScreen(
                             modifier = Modifier
                                 .size(56.dp)
                                 .clip(CircleShape)
-                                .background(SurfaceElevated),
+                                .background(vaultColors.surfaceElevated),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.FilePresent,
                                 contentDescription = null,
-                                tint = AccentCyan,
+                                tint = vaultColors.accentCyan,
                                 modifier = Modifier.size(28.dp)
                             )
                         }
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             text = "Tap to Select File",
-                            color = TextPrimary,
+                            color = vaultColors.textPrimary,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "SAF Supported • Zero Temporary Storage Overhead",
-                            color = TextMuted,
+                            color = vaultColors.textMuted,
                             fontSize = 12.sp
                         )
                     }
@@ -214,7 +307,7 @@ fun VaultScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = selectedFile.name,
-                                    color = TextPrimary,
+                                    color = vaultColors.textPrimary,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
@@ -223,7 +316,7 @@ fun VaultScreen(
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = formatBytes(selectedFile.size),
-                                    color = TextSecondary,
+                                    color = vaultColors.textSecondary,
                                     fontSize = 12.sp,
                                     fontFamily = FontFamily.Monospace
                                 )
@@ -235,8 +328,8 @@ fun VaultScreen(
                         // Status Badge
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = SurfaceElevated,
-                            border = androidx.compose.foundation.BorderStroke(
+                            color = vaultColors.surfaceElevated,
+                            border = BorderStroke(
                                 1.dp,
                                 if (selectedFile.status.isLocked) RoseProtected.copy(alpha = 0.3f)
                                 else EmeraldSuccess.copy(alpha = 0.3f)
@@ -268,23 +361,49 @@ fun VaultScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // 3. Password Input Card
+            // 3. Password Input Card with Real-Time Strength Meter
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(20.dp))
-                    .border(1.dp, SurfaceBorder, RoundedCornerShape(20.dp)),
-                colors = CardDefaults.cardColors(containerColor = SurfaceObsidian)
+                    .border(1.dp, vaultColors.surfaceBorder, RoundedCornerShape(20.dp)),
+                colors = CardDefaults.cardColors(containerColor = vaultColors.surface)
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
-                    Text(
-                        text = "MASTER PASSWORD",
-                        color = TextMuted,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "MASTER PASSWORD",
+                            color = vaultColors.textMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = EmeraldSuccess,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                text = "OWASP 600k Rounds",
+                                color = EmeraldSuccess,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(10.dp))
+
                     OutlinedTextField(
                         value = password,
                         onValueChange = {
@@ -293,8 +412,8 @@ fun VaultScreen(
                         },
                         placeholder = {
                             Text(
-                                text = "Enter password to lock/unlock",
-                                color = TextMuted,
+                                text = "Enter cryptographic master key...",
+                                color = vaultColors.textMuted,
                                 fontSize = 14.sp
                             )
                         },
@@ -302,7 +421,7 @@ fun VaultScreen(
                             Icon(
                                 imageVector = Icons.Outlined.Key,
                                 contentDescription = null,
-                                tint = AccentCyan,
+                                tint = vaultColors.accentCyan,
                                 modifier = Modifier.size(20.dp)
                             )
                         },
@@ -311,7 +430,7 @@ fun VaultScreen(
                                 Icon(
                                     imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                                     contentDescription = null,
-                                    tint = TextSecondary,
+                                    tint = vaultColors.textSecondary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -322,20 +441,63 @@ fun VaultScreen(
                         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         enabled = !progress.isRunning,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AccentCyan,
-                            unfocusedBorderColor = SurfaceBorder,
-                            focusedContainerColor = SurfaceElevated,
-                            unfocusedContainerColor = SurfaceElevated,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
+                            focusedBorderColor = vaultColors.accentCyan,
+                            unfocusedBorderColor = vaultColors.surfaceBorder,
+                            focusedContainerColor = vaultColors.surfaceElevated,
+                            unfocusedContainerColor = vaultColors.surfaceElevated,
+                            focusedTextColor = vaultColors.textPrimary,
+                            unfocusedTextColor = vaultColors.textPrimary
                         ),
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    // Password Entropy / Strength Bar (Mirroring Web Workstation)
+                    val strength = remember(password) { calculatePasswordStrength(password) }
+                    val animatedProgress by animateFloatAsState(
+                        targetValue = strength.percentage,
+                        animationSpec = tween(durationMillis = 300),
+                        label = "entropy_progress"
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(if (vaultColors.isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0))
+                        ) {
+                            if (animatedProgress > 0f) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(animatedProgress)
+                                        .clip(RoundedCornerShape(2.dp))
+                                        .background(strength.color)
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = strength.label,
+                            color = if (password.isEmpty()) vaultColors.textMuted else strength.color,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "🔒 Secured by 600,000 PBKDF2-SHA256 rounds (OWASP Gold Standard)",
-                        color = TextMuted,
+                        color = vaultColors.textMuted,
                         fontSize = 11.sp
                     )
                 }
@@ -446,8 +608,8 @@ fun VaultScreen(
                         .fillMaxWidth()
                         .padding(top = 20.dp)
                         .clip(RoundedCornerShape(20.dp))
-                        .border(1.dp, AccentCyan.copy(alpha = 0.4f), RoundedCornerShape(20.dp)),
-                    colors = CardDefaults.cardColors(containerColor = SurfaceObsidian)
+                        .border(1.dp, vaultColors.accentCyan.copy(alpha = 0.4f), RoundedCornerShape(20.dp)),
+                    colors = CardDefaults.cardColors(containerColor = vaultColors.surface)
                 ) {
                     Column(modifier = Modifier.padding(18.dp)) {
                         Row(
@@ -458,13 +620,13 @@ fun VaultScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(16.dp),
-                                    color = AccentCyan,
+                                    color = vaultColors.accentCyan,
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
                                     text = progress.phase,
-                                    color = AccentCyan,
+                                    color = vaultColors.accentCyan,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -476,7 +638,7 @@ fun VaultScreen(
 
                             Text(
                                 text = "${"%.1f".format(percent)}%",
-                                color = TextPrimary,
+                                color = vaultColors.textPrimary,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace
@@ -495,8 +657,8 @@ fun VaultScreen(
                                 .fillMaxWidth()
                                 .height(8.dp)
                                 .clip(RoundedCornerShape(4.dp)),
-                            color = AccentCyan,
-                            trackColor = SurfaceElevated
+                            color = vaultColors.accentCyan,
+                            trackColor = vaultColors.surfaceElevated
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -507,13 +669,13 @@ fun VaultScreen(
                         ) {
                             Text(
                                 text = "${formatBytes(progress.currentBytes)} / ${formatBytes(progress.totalBytes)}",
-                                color = TextSecondary,
+                                color = vaultColors.textSecondary,
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
                                 text = "${"%.1f".format(progress.speedMBps)} MB/s | ETA: ${formatEta(progress.etaSeconds)}",
-                                color = TextSecondary,
+                                color = vaultColors.textSecondary,
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace
                             )
@@ -538,7 +700,7 @@ fun VaultScreen(
                             if (isError) RoseProtected.copy(alpha = 0.5f) else EmeraldSuccess.copy(alpha = 0.5f),
                             RoundedCornerShape(16.dp)
                         ),
-                    colors = CardDefaults.cardColors(containerColor = SurfaceObsidian)
+                    colors = CardDefaults.cardColors(containerColor = vaultColors.surface)
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
@@ -553,7 +715,7 @@ fun VaultScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = resultMessage ?: "",
-                            color = TextPrimary,
+                            color = vaultColors.textPrimary,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -567,7 +729,7 @@ fun VaultScreen(
             // 7. Subtle Footer
             Text(
                 text = "Universal Vault • 100% In-Place Authenticated Encryption",
-                color = TextMuted,
+                color = vaultColors.textMuted,
                 fontSize = 11.sp,
                 textAlign = TextAlign.Center
             )

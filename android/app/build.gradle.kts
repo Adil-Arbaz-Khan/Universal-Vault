@@ -11,8 +11,8 @@ android {
         applicationId = "com.adil.universalvault"
         minSdk = 26
         targetSdk = 37
-        versionCode = 552
-        versionName = "5.5.2"
+        versionCode = 5521
+        versionName = "5.5.21"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

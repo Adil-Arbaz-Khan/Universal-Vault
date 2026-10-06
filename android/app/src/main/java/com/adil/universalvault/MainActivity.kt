@@ -12,12 +12,15 @@ import com.adil.universalvault.crypto.FileDescriptorVaultChannel
 import com.adil.universalvault.crypto.VaultEngine
 import com.adil.universalvault.ui.*
 import com.adil.universalvault.ui.theme.UniversalVaultTheme
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
+    private val prefs by lazy { getSharedPreferences("vault_prefs", Context.MODE_PRIVATE) }
+    private var isDarkThemeState by mutableStateOf(true)
     private var selectedFileState by mutableStateOf<SelectedFileInfo?>(null)
     private var progressState by mutableStateOf(ProgressState())
     private var resultMessageState by mutableStateOf<String?>(null)
@@ -26,15 +29,21 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        isDarkThemeState = prefs.getBoolean("dark_mode", true)
         handleIntent(intent)
 
         setContent {
-            UniversalVaultTheme {
+            UniversalVaultTheme(darkTheme = isDarkThemeState) {
                 VaultScreen(
                     selectedFile = selectedFileState,
                     progress = progressState,
                     resultMessage = resultMessageState,
                     isError = isErrorState,
+                    isDarkTheme = isDarkThemeState,
+                    onToggleTheme = {
+                        isDarkThemeState = !isDarkThemeState
+                        prefs.edit().putBoolean("dark_mode", isDarkThemeState).apply()
+                    },
                     onFileSelected = { uri -> loadFile(uri) },
                     onLockClicked = { password -> executeLock(password) },
                     onUnlockClicked = { password -> executeUnlock(password) },
