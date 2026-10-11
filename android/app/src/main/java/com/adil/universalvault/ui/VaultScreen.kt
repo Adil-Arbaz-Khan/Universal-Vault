@@ -41,8 +41,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import android.graphics.BitmapFactory
-import androidx.compose.ui.graphics.asImageBitmap
 import com.adil.universalvault.R
 import com.adil.universalvault.crypto.VaultEngine
 import com.adil.universalvault.ui.theme.*
@@ -141,7 +139,8 @@ fun VaultScreen(
     onStreamClicked: (String) -> Unit,
     onClearResult: () -> Unit,
     ramViewerData: RamViewerData?,
-    onCloseRamViewer: () -> Unit
+    onCloseRamViewer: () -> Unit,
+    onOpenExternally: (() -> Unit)? = null
 ) {
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -843,8 +842,267 @@ fun VaultScreen(
         RamViewerDialog(
             data = ramViewerData,
             onDismiss = onCloseRamViewer,
+            onOpenExternally = onOpenExternally,
             isDarkTheme = isDarkTheme
         )
+    }
+}
+
+@Composable
+fun ExternalStreamLauncherCard(
+    data: RamViewerData,
+    onOpenExternally: (() -> Unit)?,
+    vaultColors: VaultColors,
+    modifier: Modifier = Modifier
+) {
+    val ext = remember(data.fileName) { data.fileName.substringAfterLast('.', "").lowercase() }
+
+    val (mediaIcon, mediaCategory) = remember(ext, data.mimeType) {
+        when {
+            ext in listOf("mp4", "m4v", "mkv", "webm", "mov", "avi", "3gp", "ts") || data.mimeType.startsWith("video/") ->
+                Pair(Icons.Default.PlayArrow, "Video Stream")
+            ext in listOf("mp3", "wav", "m4a", "aac", "ogg", "oga", "flac", "opus", "wma") || data.mimeType.startsWith("audio/") ->
+                Pair(Icons.Default.MusicNote, "Audio Stream")
+            ext == "pdf" || data.mimeType == "application/pdf" ->
+                Pair(Icons.Default.Description, "PDF Document")
+            ext in listOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "svg") || data.mimeType.startsWith("image/") ->
+                Pair(Icons.Default.Image, "Image Asset")
+            else ->
+                Pair(Icons.Default.InsertDriveFile, "Binary Stream")
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = vaultColors.accentCyan.copy(alpha = 0.12f),
+            border = BorderStroke(1.5.dp, vaultColors.accentCyan.copy(alpha = 0.6f)),
+            modifier = Modifier.size(80.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = mediaIcon,
+                    contentDescription = mediaCategory,
+                    tint = vaultColors.accentCyan,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = vaultColors.surfaceElevated,
+            border = BorderStroke(1.dp, vaultColors.surfaceBorder)
+        ) {
+            Text(
+                text = mediaCategory.uppercase(),
+                color = vaultColors.accentCyan,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = data.fileName,
+            color = vaultColors.textPrimary,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = "${formatBytes(data.fileSize)} • ${data.mimeType}",
+            color = vaultColors.textSecondary,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = if (vaultColors.isDark) Color(0xFF0F172A) else Color(0xFFF1F5F9),
+            border = BorderStroke(1.dp, vaultColors.surfaceBorder),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = "Security",
+                    tint = EmeraldSuccess,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = "Hardware Accelerated Playback",
+                        color = vaultColors.textPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Decrypted into volatile RAM. Streams securely to external apps (VLC, MX Player, Chrome, Acrobat) without touching persistent storage.",
+                        color = vaultColors.textMuted,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(
+            onClick = { onOpenExternally?.invoke() },
+            enabled = onOpenExternally != null,
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = vaultColors.accentCyan,
+                contentColor = Color.Black
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .padding(horizontal = 8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.OpenInNew,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "OPEN IN EXTERNAL APP",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                letterSpacing = 0.5.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun TextRamViewer(
+    bytes: ByteArray,
+    vaultColors: VaultColors,
+    modifier: Modifier = Modifier
+) {
+    val textContent = remember(bytes) {
+        try {
+            String(bytes, Charsets.UTF_8)
+        } catch (e: Exception) {
+            String(bytes, Charsets.ISO_8859_1)
+        }
+    }
+
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(false) }
+
+    val lines = remember(textContent) {
+        textContent.lines()
+    }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = vaultColors.surfaceElevated,
+                border = BorderStroke(1.dp, vaultColors.surfaceBorder)
+            ) {
+                Text(
+                    text = "${lines.size} lines • ${formatBytes(bytes.size.toLong())}",
+                    color = vaultColors.textSecondary,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+
+            IconButton(
+                onClick = { isSearchActive = !isSearchActive },
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
+                    contentDescription = "Search in text",
+                    tint = vaultColors.accentCyan,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
+        if (isSearchActive) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Filter text...", fontSize = 12.sp, color = vaultColors.textMuted) },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = vaultColors.accentCyan,
+                    unfocusedBorderColor = vaultColors.surfaceBorder,
+                    focusedTextColor = vaultColors.textPrimary,
+                    unfocusedTextColor = vaultColors.textPrimary
+                ),
+                shape = RoundedCornerShape(10.dp)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (vaultColors.isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC))
+                .border(1.dp, vaultColors.surfaceBorder, RoundedCornerShape(12.dp))
+                .padding(10.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            val displayedText = if (searchQuery.isNotEmpty()) {
+                lines.filter { it.contains(searchQuery, ignoreCase = true) }.joinToString("\n")
+            } else {
+                textContent
+            }
+
+            Text(
+                text = displayedText,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = vaultColors.textPrimary,
+                lineHeight = 18.sp
+            )
+        }
     }
 }
 
@@ -852,6 +1110,7 @@ fun VaultScreen(
 fun RamViewerDialog(
     data: RamViewerData,
     onDismiss: () -> Unit,
+    onOpenExternally: (() -> Unit)? = null,
     isDarkTheme: Boolean
 ) {
     val vaultColors = LocalVaultColors.current
@@ -871,34 +1130,14 @@ fun RamViewerDialog(
         }
     }
 
-    val isImage = remember(data.fileName, data.mimeType) {
+    val isText = remember(data.fileName, data.mimeType, data.bytes) {
         val ext = data.fileName.substringAfterLast('.', "").lowercase()
-        ext in listOf("png", "jpg", "jpeg", "webp", "gif", "bmp") || data.mimeType.startsWith("image/")
-    }
-
-    val isText = remember(data.fileName, data.mimeType) {
-        val ext = data.fileName.substringAfterLast('.', "").lowercase()
-        ext in listOf("txt", "md", "json", "csv", "tsv", "log", "xml", "html", "htm", "css", "js", "py", "kt", "kts", "c", "cpp", "h", "rs", "go", "java", "sql", "sh", "bat", "env", "yml", "yaml", "toml", "ini") || data.mimeType.startsWith("text/") || data.mimeType.contains("json") || data.mimeType.contains("xml")
-    }
-
-    val decodedBitmap = remember(data.bytes, isImage) {
-        if (isImage) {
-            try {
-                BitmapFactory.decodeByteArray(data.bytes, 0, data.bytes.size)
-            } catch (e: Exception) {
-                null
-            }
-        } else null
-    }
-
-    val decodedText = remember(data.bytes, isText) {
-        if (isText) {
-            try {
-                String(data.bytes, Charsets.UTF_8)
-            } catch (e: Exception) {
-                null
-            }
-        } else null
+        ext in listOf(
+            "txt", "md", "markdown", "json", "csv", "tsv", "log", "xml", "html", "htm", "css",
+            "js", "ts", "jsx", "tsx", "py", "kt", "kts", "c", "cpp", "h", "hpp", "rs", "go",
+            "java", "sql", "sh", "bash", "bat", "cmd", "env", "yml", "yaml", "toml", "ini",
+            "conf", "properties", "gradle"
+        ) || data.mimeType.startsWith("text/") || data.mimeType.contains("json") || data.mimeType.contains("xml") || VaultEngine.isTextContent(data.bytes)
     }
 
     Dialog(
@@ -916,7 +1155,7 @@ fun RamViewerDialog(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(20.dp)
+                    .padding(18.dp)
             ) {
                 // Header Row
                 Row(
@@ -944,7 +1183,7 @@ fun RamViewerDialog(
                         Text(
                             text = data.fileName,
                             color = vaultColors.textPrimary,
-                            fontSize = 16.sp,
+                            fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -956,13 +1195,30 @@ fun RamViewerDialog(
                         )
                     }
 
-                    // Auto-wipe pill & Panic button
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        if (isText && onOpenExternally != null) {
+                            IconButton(
+                                onClick = onOpenExternally,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(vaultColors.surfaceElevated)
+                                    .border(1.dp, vaultColors.surfaceBorder, RoundedCornerShape(10.dp))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.OpenInNew,
+                                    contentDescription = "Open with External App",
+                                    tint = vaultColors.accentCyan,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(10.dp),
                             color = vaultColors.surfaceElevated,
                             border = BorderStroke(1.dp, vaultColors.surfaceBorder)
                         ) {
@@ -972,30 +1228,30 @@ fun RamViewerDialog(
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                             )
                         }
 
                         Button(
                             onClick = onDismiss,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = RoseProtected),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                             modifier = Modifier.height(34.dp)
                         ) {
                             Text(
-                                text = "WIPE RAM",
+                                text = "PANIC WIPE",
                                 color = Color.White,
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
                 HorizontalDivider(color = vaultColors.surfaceBorder)
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // Content View
                 Box(
@@ -1005,85 +1261,17 @@ fun RamViewerDialog(
                         .clip(RoundedCornerShape(16.dp))
                         .background(vaultColors.surface)
                         .border(1.dp, vaultColors.surfaceBorder, RoundedCornerShape(16.dp))
-                        .padding(12.dp),
+                        .padding(10.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    when {
-                        decodedBitmap != null -> {
-                            Image(
-                                bitmap = decodedBitmap.asImageBitmap(),
-                                contentDescription = data.fileName,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(RoundedCornerShape(8.dp))
-                            )
-                        }
-                        decodedText != null -> {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                Text(
-                                    text = decodedText,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 12.sp,
-                                    color = vaultColors.textPrimary,
-                                    lineHeight = 18.sp
-                                )
-                            }
-                        }
-                        else -> {
-                            // Rich Media / PDF / Binary inspection card
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(16.dp)
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Shield,
-                                    contentDescription = null,
-                                    tint = vaultColors.accentCyan,
-                                    modifier = Modifier.size(48.dp)
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = "In-Memory Cryptographic Container",
-                                    color = vaultColors.textPrimary,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = "MIME: ${data.mimeType} • Size: ${formatBytes(data.fileSize)}",
-                                    color = vaultColors.textSecondary,
-                                    fontSize = 12.sp,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = "This document is securely decoded into volatile heap memory. Zero unencrypted bytes have touched persistent storage. To protect maximum sovereign privacy, Android denies external third-party app exposure.",
-                                    color = vaultColors.textMuted,
-                                    fontSize = 12.sp,
-                                    textAlign = TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                                val previewBytes = remember(data.bytes) {
-                                    val count = minOf(128, data.bytes.size)
-                                    data.bytes.copyOfRange(0, count).joinToString(" ") { "%02X".format(it) }
-                                }
-                                Text(
-                                    text = "Hex Signature Preview:\n$previewBytes",
-                                    color = vaultColors.accentCyan.copy(alpha = 0.8f),
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
-                        }
+                    if (isText) {
+                        TextRamViewer(bytes = data.bytes, vaultColors = vaultColors)
+                    } else {
+                        ExternalStreamLauncherCard(
+                            data = data,
+                            onOpenExternally = onOpenExternally,
+                            vaultColors = vaultColors
+                        )
                     }
                 }
             }

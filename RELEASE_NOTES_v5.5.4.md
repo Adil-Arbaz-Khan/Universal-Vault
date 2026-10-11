@@ -14,11 +14,11 @@ Universal Vault **v5.5.4** introduces **Volatile RAM Streaming (`vault view` / S
   * **Disguised Filename Resolution**: Automatically recovers the original filename and MIME type from the 104-byte footer when streaming files masked with gibberish names.
   * **Commands**: `vault view <path>` (Go Native CLI), `python tools/vault.py view <path>`, `View.bat` (Windows), and `view.sh` (Linux/macOS/Termux).
 
-### 2. 📱 Android In-App RAM Streamer & Auto-Wipe Panic Protocol
-* **In-App RAM Previewer**: Added **'STREAM IN RAM'** action in the native Jetpack Compose UI.
-* **Supported Formats**: Direct in-memory rendering of images (`BitmapFactory.decodeByteArray`) and scrollable text/code documents directly from heap.
-* **Emergency Panic Protocol**: 180-second countdown timer that automatically closes the modal and overwrites the memory buffer with zeros (`bytes.fill(0)`), plus a manual one-tap **'WIPE RAM'** panic button.
-* **Air-Gapped Sovereign Design**: Refuses to broadcast plaintext buffers to external third-party apps, maintaining complete sovereign isolation.
+### 2. 📱 Android Volatile RAM Streamer & Hardware-Accelerated External Playback
+* **Hardware-Accelerated External Streaming**: Seamlessly stream decrypted rich media (videos, audio, PDFs) to external apps (VLC, MX Player, Photos, Chrome, Acrobat) via Android's secure `FileProvider` with exact MIME detection and decrypted original title restoration.
+* **Expanded Memory Capacity & Large Heap**: Enabled `android:largeHeap="true"`, allowing up to 1 GB volatile streaming on modern devices.
+* **RAM Overload & OOM Safeguards**: Dynamic heap capacity analysis and allocation error guards that politely notify the user when device memory is constrained rather than crashing.
+* **Volatile Stream Session Manager**: In-app text viewer with live search and lines inspection; 180s auto-wipe countdown timer and instant red 'PANIC WIPE' button that zeroes buffers (`bytes.fill(0)`) and shreds temporary cache files with zeroed blocks.
 
 ### 3. 🛡️ WebApp Gibberish Resumability Fix (`Vault_App.html`)
 * **State Bitmask Separation**: Resolved an issue where files locked with `-g` (`FlagGibberishName = 4`) were mistakenly flagged as interrupted operations during web decryption. The check now isolates operational state bits (`opState & 3`), enabling flawless 100% roundtrip decryption and streaming in WebCrypto.
@@ -43,14 +43,14 @@ Universal Vault **v5.5.4** introduces **Volatile RAM Streaming (`vault view` / S
 d5797a0ac5eaf990d86e329de0b2a08a4d439c28fa6f4cae614864984a0f7ec5  Universal-Vault-v5.5.4-Windows.zip
 6fe4f1d1d7bf0aa6556ab92a141bbb4f55a1114a46de858e9ff21be8eb089bac  Universal-Vault-v5.5.4-Linux.zip
 46a7640ad293ae58f2afddaf4f6df8e2f0b8e35058ba6b05f7ba8e927895131b  Universal-Vault-v5.5.4-macOS.zip
-ed6651237914077ca19514b726bcb704e4c4b95a56dbfa46fa73ac00cddc9e38  Universal-Vault-v5.5.4-Android.zip
+e9429dc0cb652490542132fbcca984eaeeff3967d799c4c739181cabdc72e46a  Universal-Vault-v5.5.4-Android.zip
 dbe9b9a314fe24c5dcbdeb596ecaec0d0632669693dad12a6e8cc93d9df15efd  Universal-Vault-v5.5.4-iOS.zip
-c08c61522eb8ab3065ce196c7cbf683539918e2dbcc4414961d9ef202ed46bd8  Universal-Vault-v5.5.4-Universal.zip
+1e60596b77f60e741993ee93fb20ea65640efc225eec2f6c9f0af1cbc68cd978  Universal-Vault-v5.5.4-Universal.zip
 ```
 
 ### Standalone Android APK:
 ```text
-f1e9d77cf66a021d2df5837092dc4eabab3f506b2c723709b212a1823ef5931c  UniversalVault-v5.5.4.apk
+c5be129cb27784c97d546c8d1826f17cb2aba9490a23028cd8bf8a78f06cb4f0  UniversalVault-v5.5.4.apk
 ```
 
 ### Extracted Native CLI Binaries:

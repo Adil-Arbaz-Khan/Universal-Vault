@@ -2,6 +2,7 @@ package com.adil.universalvault.crypto
 
 import android.system.Os
 import android.system.OsConstants
+import android.webkit.MimeTypeMap
 import java.io.Closeable
 import java.io.FileDescriptor
 import java.io.IOException
@@ -819,8 +820,22 @@ object VaultEngine {
             totalCipherLen
         }
 
-        if (dataLen > 150L * 1024 * 1024) {
-            return Result.failure(IllegalStateException("File is too large for Android volatile RAM streaming (${"%.1f".format(dataLen / (1024.0 * 1024.0))} MB exceeds 150 MB safety threshold)"))
+        val runtime = Runtime.getRuntime()
+        val maxHeap = runtime.maxMemory()
+        val usedHeap = runtime.totalMemory() - runtime.freeMemory()
+        val availableHeap = maxOf(0L, maxHeap - usedHeap)
+        // Dynamic RAM safety threshold: Allow up to 90% of available heap or 1 GB
+        val maxAllowed = minOf(1024L * 1024 * 1024, (availableHeap * 0.90).toLong())
+
+        if (dataLen > maxAllowed) {
+            val fileMb = formatBytes(dataLen)
+            val ramMb = formatBytes(availableHeap)
+            return Result.failure(
+                IllegalStateException(
+                    "RAM Overload Protected: File size ($fileMb) exceeds currently available volatile RAM ($ramMb). " +
+                    "To prevent an Out-Of-Memory crash, please close background apps, use UNLOCK for in-place decryption, or inspect on desktop."
+                )
+            )
         }
 
         listener?.onProgress("Key Derivation", 0L, dataLen, 0.0, 0L)
@@ -876,7 +891,7 @@ object VaultEngine {
                     val metaBlockOffset = (dataLen + 15) / 16
                     val metaCounter = makeCounter(footer.nonce, metaBlockOffset)
                     val metaCipher = Cipher.getInstance("AES/CTR/NoPadding")
-                    metaCipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(metaCounter))
+                    metaCipher.init(Cipher.ENCRYPT_MODE, keySpec, IvParameterSpec(metaCounter))
                     val decNameBytes = metaCipher.doFinal(encNameBuf.array())
                     restoredOrigName = String(decNameBytes, Charsets.UTF_8)
                 }
@@ -885,8 +900,18 @@ object VaultEngine {
             }
         }
 
-        // Stream into volatile memory buffer without writing to disk
-        val memoryBytes = ByteArray(dataLen.toInt())
+        // Stream into volatile memory buffer with OOM guard
+        val memoryBytes = try {
+            ByteArray(dataLen.toInt())
+        } catch (e: OutOfMemoryError) {
+            System.gc()
+            return Result.failure(
+                IllegalStateException(
+                    "RAM Full / Heap Exhaustion: Device ran out of contiguous memory while allocating ${formatBytes(dataLen)}. " +
+                    "Please close other applications or use UNLOCK to decrypt in-place on storage."
+                )
+            )
+        }
         var pos = 0L
         var blockIdx = 0L
         val decryptStartTime = System.currentTimeMillis()
@@ -898,8 +923,9 @@ object VaultEngine {
             channel.read(byteBuf)
 
             val counter = makeCounter(footer.nonce, blockIdx * (CHUNK_SIZE_V5 / 16))
-            cipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(counter))
-            cipher.update(chunkBuf, 0, take, memoryBytes, pos.toInt())
+            cipher.init(Cipher.ENCRYPT_MODE, keySpec, IvParameterSpec(counter))
+            val decBytes = cipher.doFinal(chunkBuf, 0, take)
+            System.arraycopy(decBytes, 0, memoryBytes, pos.toInt(), take)
 
             pos += take
             blockIdx++
@@ -912,5 +938,126 @@ object VaultEngine {
         }
 
         return Result.success(DecryptedMemoryResult(memoryBytes, restoredOrigName, dataLen))
+    }
+
+    fun isTextContent(bytes: ByteArray): Boolean {
+        if (bytes.isEmpty()) return true
+        val checkLen = minOf(bytes.size, 1024)
+        var nonPrintable = 0
+        for (i in 0 until checkLen) {
+            val b = bytes[i].toInt() and 0xFF
+            if (b == 0) return false // Null byte indicates binary
+            if (b < 32 && b != 9 && b != 10 && b != 13) {
+                nonPrintable++
+            }
+        }
+        return (nonPrintable.toDouble() / checkLen) < 0.05
+    }
+
+    fun detectMimeType(fileName: String, bytes: ByteArray): String {
+        // 1. Inspect magic signatures first
+        if (bytes.size >= 4) {
+            // PDF: %PDF
+            if (bytes[0] == 0x25.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x44.toByte() && bytes[3] == 0x46.toByte()) {
+                return "application/pdf"
+            }
+            // PNG: \x89PNG
+            if (bytes.size >= 8 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte()) {
+                return "image/png"
+            }
+            // JPEG: \xFF\xD8\xFF
+            if (bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte()) {
+                return "image/jpeg"
+            }
+            // GIF: GIF8
+            if (bytes.size >= 6 && bytes[0] == 'G'.code.toByte() && bytes[1] == 'I'.code.toByte() && bytes[2] == 'F'.code.toByte()) {
+                return "image/gif"
+            }
+            // WebP: RIFF....WEBP
+            if (bytes.size >= 12 && bytes[0] == 'R'.code.toByte() && bytes[1] == 'I'.code.toByte() && bytes[2] == 'F'.code.toByte() && bytes[3] == 'F'.code.toByte()
+                && bytes[8] == 'W'.code.toByte() && bytes[9] == 'E'.code.toByte() && bytes[10] == 'B'.code.toByte() && bytes[11] == 'P'.code.toByte()) {
+                return "image/webp"
+            }
+            // MP4: ....ftyp
+            if (bytes.size >= 8 && bytes[4] == 'f'.code.toByte() && bytes[5] == 't'.code.toByte() && bytes[6] == 'y'.code.toByte() && bytes[7] == 'p'.code.toByte()) {
+                return "video/mp4"
+            }
+            // WebM / Matroska: 0x1A 0x45 0xDF 0xA3
+            if (bytes[0] == 0x1A.toByte() && bytes[1] == 0x45.toByte() && bytes[2] == 0xDF.toByte() && bytes[3] == 0xA3.toByte()) {
+                return "video/webm"
+            }
+            // MP3: ID3 or sync frame
+            if (bytes.size >= 3 && bytes[0] == 'I'.code.toByte() && bytes[1] == 'D'.code.toByte() && bytes[2] == '3'.code.toByte()) {
+                return "audio/mpeg"
+            }
+            if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && (bytes[1].toInt() and 0xE0) == 0xE0) {
+                return "audio/mpeg"
+            }
+            // WAV: RIFF....WAVE
+            if (bytes.size >= 12 && bytes[0] == 'R'.code.toByte() && bytes[1] == 'I'.code.toByte() && bytes[2] == 'F'.code.toByte() && bytes[3] == 'F'.code.toByte()
+                && bytes[8] == 'W'.code.toByte() && bytes[9] == 'A'.code.toByte() && bytes[10] == 'V'.code.toByte() && bytes[11] == 'E'.code.toByte()) {
+                return "audio/wav"
+            }
+            // OGG: OggS
+            if (bytes[0] == 'O'.code.toByte() && bytes[1] == 'g'.code.toByte() && bytes[2] == 'g'.code.toByte() && bytes[3] == 'S'.code.toByte()) {
+                return "audio/ogg"
+            }
+            // FLAC: fLaC
+            if (bytes[0] == 'f'.code.toByte() && bytes[1] == 'L'.code.toByte() && bytes[2] == 'a'.code.toByte() && bytes[3] == 'C'.code.toByte()) {
+                return "audio/flac"
+            }
+        }
+
+        // 2. Extension lookup
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        val mimeFromExt = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+        if (mimeFromExt != null && mimeFromExt != "application/octet-stream") {
+            return mimeFromExt
+        }
+
+        // Known extension fallbacks
+        when (ext) {
+            "mp4", "m4v" -> return "video/mp4"
+            "mkv" -> return "video/x-matroska"
+            "webm" -> return "video/webm"
+            "mov" -> return "video/quicktime"
+            "avi" -> return "video/x-msvideo"
+            "3gp" -> return "video/3gpp"
+            "mp3" -> return "audio/mpeg"
+            "wav" -> return "audio/wav"
+            "m4a", "aac" -> return "audio/mp4"
+            "ogg", "oga", "opus" -> return "audio/ogg"
+            "flac" -> return "audio/flac"
+            "pdf" -> return "application/pdf"
+            "jpg", "jpeg" -> return "image/jpeg"
+            "png" -> return "image/png"
+            "gif" -> return "image/gif"
+            "webp" -> return "image/webp"
+            "bmp" -> return "image/bmp"
+            "svg" -> return "image/svg+xml"
+            "txt", "log", "env", "ini", "conf", "properties" -> return "text/plain"
+            "md", "markdown" -> return "text/markdown"
+            "json" -> return "application/json"
+            "xml" -> return "application/xml"
+            "html", "htm" -> return "text/html"
+            "csv" -> return "text/csv"
+        }
+
+        // 3. Fallback to heuristic text check
+        if (isTextContent(bytes)) {
+            return "text/plain"
+        }
+
+        return "application/octet-stream"
+    }
+
+    fun formatBytes(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        val kb = bytes / 1024.0
+        if (kb < 1024) return "${"%.1f".format(kb)} KB"
+        val mb = kb / 1024.0
+        if (mb < 1024) return "${"%.1f".format(mb)} MB"
+        val gb = mb / 1024.0
+        return "${"%.2f".format(gb)} GB"
     }
 }

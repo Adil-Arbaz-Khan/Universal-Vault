@@ -14,6 +14,7 @@ import com.adil.universalvault.ui.*
 import com.adil.universalvault.ui.theme.UniversalVaultTheme
 import android.content.Context
 import android.webkit.MimeTypeMap
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -55,10 +56,21 @@ class MainActivity : ComponentActivity() {
                     onCloseRamViewer = {
                         ramViewerDataState?.bytes?.fill(0)
                         ramViewerDataState = null
+                        wipeEphemeralCache()
+                    },
+                    onOpenExternally = {
+                        ramViewerDataState?.let { openExternally(it) }
                     }
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        ramViewerDataState?.bytes?.fill(0)
+        ramViewerDataState = null
+        wipeEphemeralCache()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -342,17 +354,23 @@ class MainActivity : ComponentActivity() {
                     if (result.isSuccess) {
                         val memoryRes = result.getOrThrow()
                         val displayName = memoryRes.originalName ?: fileInfo.name
-                        val ext = displayName.substringAfterLast('.', "").lowercase()
-                        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+                        val mime = VaultEngine.detectMimeType(displayName, memoryRes.bytes)
 
-                        ramViewerDataState = RamViewerData(
+                        val ramData = RamViewerData(
                             bytes = memoryRes.bytes,
                             fileName = displayName,
                             fileSize = memoryRes.dataLen,
                             mimeType = mime
                         )
+                        ramViewerDataState = ramData
                         resultMessageState = "Decrypted into volatile RAM (${memoryRes.dataLen} bytes, zero disk footprints)"
                         isErrorState = false
+
+                        // Auto-launch external app chooser for rich media
+                        val isText = VaultEngine.isTextContent(memoryRes.bytes) || mime.startsWith("text/")
+                        if (!isText) {
+                            openExternally(ramData)
+                        }
                     } else {
                         resultMessageState = result.exceptionOrNull()?.message ?: "Stream decryption failed"
                         isErrorState = true
@@ -366,5 +384,59 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun openExternally(data: RamViewerData) {
+        try {
+            val cacheDir = File(cacheDir, "ephemeral_stream").apply { mkdirs() }
+            val sanitized = data.fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            val ext = data.fileName.substringAfterLast('.', "")
+            val safeName = if (sanitized.isNotBlank()) sanitized else "stream_${System.currentTimeMillis()}.${if (ext.isNotEmpty()) ext else "bin"}"
+            val tempFile = File(cacheDir, safeName)
+            tempFile.outputStream().use { fos ->
+                fos.write(data.bytes)
+                fos.flush()
+            }
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "${packageName}.fileprovider",
+                tempFile
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, data.mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Open with app"))
+        } catch (e: Exception) {
+            resultMessageState = "Cannot open external application: ${e.localizedMessage}"
+            isErrorState = true
+        }
+    }
+
+    private fun wipeEphemeralCache() {
+        try {
+            val cacheDir = File(cacheDir, "ephemeral_stream")
+            if (cacheDir.exists()) {
+                cacheDir.listFiles()?.forEach { file ->
+                    try {
+                        val len = file.length()
+                        if (len > 0) {
+                            file.outputStream().use { fos ->
+                                val zeroBuf = ByteArray(65536)
+                                var remaining = len
+                                while (remaining > 0) {
+                                    val toWrite = minOf(remaining, zeroBuf.size.toLong()).toInt()
+                                    fos.write(zeroBuf, 0, toWrite)
+                                    remaining -= toWrite
+                                }
+                                fos.flush()
+                            }
+                        }
+                        file.delete()
+                    } catch (e: Exception) {}
+                }
+                cacheDir.delete()
+            }
+        } catch (e: Exception) {}
     }
 }

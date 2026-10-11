@@ -112,7 +112,8 @@ android_readme = (
     f"   File: UniversalVault-v{VERSION}.apk\n"
     "   - Install: Open this APK directly on your Android phone to install.\n"
     "   - 100% in-place sovereign encryption via Storage Access Framework (SAF).\n"
-    "   - Volatile RAM Streamer: View images & documents directly in RAM with zero disk writes.\n"
+    "   - Volatile RAM Streamer: View text in-app and stream rich media (video, audio, PDF) to external players (VLC, MX Player, Chrome) with zero disk footprint.\n"
+    "   - Large Heap (up to 1 GB) & Active RAM overload / OutOfMemory protection.\n"
     "   - 600,000 PBKDF2-HMAC-SHA256 iterations (OWASP Gold Standard).\n"
     "   - Filename Gibberish Masking (-g / --gibberish) toggle built-in.\n"
     "   - Hardware write barrier synchronization (Os.fsync) & crash resumption.\n"
@@ -226,11 +227,11 @@ with open(template_path, "w", encoding="utf-8") as f:
     f.write("  * **Rich Media & Documents (Images, 4K Video, Audio, PDF)**: CLI automatically spawns an ephemeral loopback HTTP server (`http://127.0.0.1:<port>/<token>/<filename>`) with dynamic OS port allocation and an unguessable 16-hex session token. Launches the system default browser with full HTTP 206 Partial Content (range requests) for seamless video seeking. RAM is securely purged and zeroized upon pressing Enter or closing the session.\n")
     f.write("  * **Disguised Filename Resolution**: Automatically recovers the original filename and MIME type from the 104-byte footer when streaming files masked with gibberish names.\n")
     f.write("  * **Commands**: `vault view <path>` (Go Native CLI), `python tools/vault.py view <path>`, `View.bat` (Windows), and `view.sh` (Linux/macOS/Termux).\n\n")
-    f.write("### 2. 📱 Android In-App RAM Streamer & Auto-Wipe Panic Protocol\n")
-    f.write("* **In-App RAM Previewer**: Added **'STREAM IN RAM'** action in the native Jetpack Compose UI.\n")
-    f.write("* **Supported Formats**: Direct in-memory rendering of images (`BitmapFactory.decodeByteArray`) and scrollable text/code documents directly from heap.\n")
-    f.write("* **Emergency Panic Protocol**: 180-second countdown timer that automatically closes the modal and overwrites the memory buffer with zeros (`bytes.fill(0)`), plus a manual one-tap **'WIPE RAM'** panic button.\n")
-    f.write("* **Air-Gapped Sovereign Design**: Refuses to broadcast plaintext buffers to external third-party apps, maintaining complete sovereign isolation.\n\n")
+    f.write("### 2. 📱 Android Volatile RAM Streamer & Hardware-Accelerated External Playback\n")
+    f.write("* **Hardware-Accelerated External Streaming**: Seamlessly stream decrypted rich media (videos, audio, PDFs) to external apps (VLC, MX Player, Photos, Chrome, Acrobat) via Android's secure `FileProvider` with exact MIME detection and decrypted original title restoration.\n")
+    f.write("* **Expanded Memory Capacity & Large Heap**: Enabled `android:largeHeap=\"true\"`, allowing up to 1 GB volatile streaming on modern devices.\n")
+    f.write("* **RAM Overload & OOM Safeguards**: Dynamic heap capacity analysis and allocation error guards that politely notify the user when device memory is constrained rather than crashing.\n")
+    f.write("* **Volatile Stream Session Manager**: In-app text viewer with live search and lines inspection; 180s auto-wipe countdown timer and instant red 'PANIC WIPE' button that zeroes buffers (`bytes.fill(0)`) and shreds temporary cache files with zeroed blocks.\n\n")
     f.write("### 3. 🛡️ WebApp Gibberish Resumability Fix (`Vault_App.html`)\n")
     f.write("* **State Bitmask Separation**: Resolved an issue where files locked with `-g` (`FlagGibberishName = 4`) were mistakenly flagged as interrupted operations during web decryption. The check now isolates operational state bits (`opState & 3`), enabling flawless 100% roundtrip decryption and streaming in WebCrypto.\n\n")
     f.write(f"### 4. 📱 Synchronized Universal Version Display (v{VERSION})\n")
