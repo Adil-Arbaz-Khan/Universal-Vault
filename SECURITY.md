@@ -1,4 +1,4 @@
-# Security Policy & Cryptographic Threat Model (V5.5.21)
+# Security Policy & Cryptographic Threat Model (V5.5.3)
 
 > **Official Website & Live WebApp**: [https://universal-vault.pages.dev/](https://universal-vault.pages.dev/)
 
@@ -6,7 +6,7 @@
 
 | Version | Status | Key Derivation (KDF) | Integrity / Authenticity | Payload Coverage | Fault Tolerance & Footer Format |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **V5.5.21 / V5.5+ (Native CLI, Android & WebApp)** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚡ **Crash-Safe Checkpointed (104-byte Resumable / Two-Way Rollback)** |
+| **V5.5.3 / V5.5+ (Native CLI, Android & WebApp)** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚡ **Crash-Safe Checkpointed (104-byte Resumable / Two-Way Rollback)** |
 | **V5.0** | 🟢 Supported | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚠️ Static Sealed (96-byte Non-Resumable Footer) |
 | **V4.x** | 🟡 Deprecated (Migration Only) | PBKDF2-HMAC-SHA256 (100,000 iters) | ⚠️ Password AuthHash only (No payload MAC) | ⚠️ Hybrid (Full <50MB / Header) | ❌ Non-Resumable |
 | **V3.x - V1.x** | 🔴 End-of-Life | PBKDF2-HMAC-SHA256 (10k-100k iters) | ❌ None | ⚠️ Header-Only (64 KB) | ❌ Non-Resumable |
@@ -19,9 +19,9 @@
 
 ---
 
-## 🔒 Cryptographic Specifications (V5.5.21 Architecture)
+## 🔒 Cryptographic Specifications (V5.5.3 Architecture)
 
-Universal Vault V5.5.21 implements an **Authenticated Encryption with Associated Data (AEAD)** construction following the formal **Encrypt-then-MAC (EtM)** standard (ISO/IEC 18033-4):
+Universal Vault V5.5.3 implements an **Authenticated Encryption with Associated Data (AEAD)** construction following the formal **Encrypt-then-MAC (EtM)** standard (ISO/IEC 18033-4):
 
 ### 1. Zero-Dependency Native Core (Supply-Chain Immunity)
 * The primary CLI engine (`cmd/vault`) is built entirely using the **Go Standard Library** (`crypto/aes`, `crypto/cipher`, `crypto/hmac`, `crypto/sha256`, `crypto/rand`, `crypto/subtle`).
@@ -71,6 +71,19 @@ Universal Vault V5.5.21 implements an **Authenticated Encryption with Associated
 └──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴─────────────┴─────────────┘
 ```
 
+#### C. Gibberish Filename Masking Specification (`FlagGibberishName = 0x0004`)
+When filename masking is enabled (`-g` / `--gibberish` in CLI, toggle switch in WebApp & Android):
+* **Filesystem Obfuscation**: The vault is renamed to a randomized 16-hexadecimal hash with `.vault` extension (e.g. `7f8a1c9e4b2d3f0a.vault`), disguising original file identities, extensions, and metadata from directory listings.
+* **Encrypted Metadata Header**: The original filename is encoded as UTF-8 and stored immediately after the encrypted payload at byte offset `dataLen`:
+  ```text
+  [dataLen .. dataLen + 2]       : uint16 LE (length of original filename, in bytes)
+  [dataLen + 2 .. dataLen + 2 + N]: Encrypted UTF-8 filename (AES-256-CTR)
+  ```
+* **Keystream Alignment**: Filename encryption utilizes the continuous AES-256-CTR keystream starting at counter block `(dataLen + 15) / 16`.
+* **Authenticated Encrypt-then-MAC (EtM)**: The 32-byte Master HMAC-SHA256 signature covers all bytes from index `0` up to `dataLen + metaLen`. Decryption verifies HMAC integrity across both the payload and filename metadata before any decryption or restoration occurs.
+* **State Flag Isolation**: Bit 2 (`0x0004`) is set in `StateFlags` (footer bytes 102..104), while crash-safe interruption detection strictly isolates bits 0 and 1 (`stateFlags & 3`), preserving flawless checkpoint recovery.
+* **Deterministic Restoration**: Unlocking automatically detects `FlagGibberishName`, decrypts the original filename, and renames the file back to its exact original plaintext name.
+
 ### 8. WebCrypto Air-Gapped Engine Architecture (`Vault_App.html`)
 
 Universal Vault provides an air-gapped, zero-dependency browser implementation in `Vault_App.html` (hosted at [https://universal-vault.pages.dev/app/](https://universal-vault.pages.dev/app/)):
@@ -99,7 +112,7 @@ Universal Vault provides an air-gapped, zero-dependency browser implementation i
 
 1. **Password Entropy**: The 600,000 PBKDF2 iterations substantially raise the computational cost for offline GPU attackers, but cannot protect against trivially guessable passwords. High-entropy passphrases (14+ characters) remain essential.
 2. **Browser Garbage Collection & RAM**: In `Vault_App.html`, typed arrays containing key bytes are immediately overwritten with zeros via `.fill(0)`. However, JavaScript engine garbage collectors (V8/SpiderMonkey) manage low-level heap memory dynamically. For high-security environments, close browser tabs after session completion or use the "Wipe RAM" button.
-3. **Filesystem Metadata**: The Encrypt-then-MAC tag authenticates 100% of the ciphertext file content. External filesystem metadata (e.g. filename, file modification timestamps) are managed by the host OS filesystem.
+3. **Filesystem Metadata & Filename Confidentiality**: The Encrypt-then-MAC tag authenticates 100% of the ciphertext file content. When standard in-place locking is used, external filenames remain visible. When **Gibberish Filename Masking** (`-g` / `--gibberish`) is engaged, the filename is encrypted and disguised as a random 16-hex hash, eliminating filename metadata leakage.
 4. **Endpoint Security**: The cryptographic suite assumes the host endpoint is free from active hardware keyloggers or compromised memory-scraping malware.
 5. **iOS (iPhone & iPad) Execution Model**: Unlike desktop and Android environments that support native command-line batch streaming, iOS enforces strict app sandboxing without terminal/shell access. On iOS, Universal Vault operates exclusively through the standalone client-side WebCrypto PWA (`Vault_App.html` hosted at [https://universal-vault.pages.dev/app/](https://universal-vault.pages.dev/app/)) in Safari, executing entirely in volatile browser RAM with zero terminal dependencies or background filesystem hooks.
 

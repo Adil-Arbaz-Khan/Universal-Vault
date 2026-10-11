@@ -49,7 +49,7 @@ Universal Vault CLI installs as a standalone global terminal command usable from
    ```
    *Output:*
    ```text
-   Universal Vault CLI v5.5.21 (Go Native Architecture)
+   Universal Vault CLI v5.5.3 (Go Native Architecture)
    ```
 
 ---
@@ -114,7 +114,7 @@ vault status "D:\Projects\SecretProject"
 *Example Output:*
 ```text
 ======================================================================
-  Universal Vault v5.5.21 (CLI Native): STATUS Operation
+  Universal Vault v5.5.3 (CLI Native): STATUS Operation
   Target Scope   : D:\Projects\SecretProject
   Files Located  : 3
 ======================================================================

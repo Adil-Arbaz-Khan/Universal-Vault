@@ -125,12 +125,13 @@ fun VaultScreen(
     isDarkTheme: Boolean,
     onToggleTheme: () -> Unit,
     onFileSelected: (Uri) -> Unit,
-    onLockClicked: (String) -> Unit,
+    onLockClicked: (String, Boolean) -> Unit,
     onUnlockClicked: (String) -> Unit,
     onClearResult: () -> Unit
 ) {
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    var gibberishEnabled by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val vaultColors = LocalVaultColors.current
 
@@ -209,14 +210,14 @@ fun VaultScreen(
                         }
                     }
 
-                    // Version Pill v5.5.21
+                    // Version Pill v5.5.3
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = vaultColors.surfaceElevated,
                         border = BorderStroke(1.dp, vaultColors.surfaceBorder)
                     ) {
                         Text(
-                            text = "v5.5.21",
+                            text = "v5.5.3",
                             color = vaultColors.accentCyan,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -503,7 +504,50 @@ fun VaultScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Gibberish Filename Masking Option Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(1.dp, vaultColors.surfaceBorder, RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = vaultColors.surface)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Disguise Filename (Gibberish)",
+                            color = vaultColors.textPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Random 16-hex hash • Restored on unlock",
+                            color = vaultColors.textMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Switch(
+                        checked = gibberishEnabled,
+                        onCheckedChange = { gibberishEnabled = it },
+                        enabled = !progress.isRunning,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = vaultColors.accentCyan
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
 
             // 4. Action Buttons
             Row(
@@ -514,7 +558,7 @@ fun VaultScreen(
                 Button(
                     onClick = {
                         focusManager.clearFocus()
-                        onLockClicked(password)
+                        onLockClicked(password, gibberishEnabled)
                     },
                     enabled = selectedFile != null && password.isNotEmpty() && !progress.isRunning,
                     shape = RoundedCornerShape(16.dp),

@@ -19,6 +19,8 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
+VERSION = "5.5.3"
+
 MAGIC_V5 = b"VAULTV05"
 MAGIC_V4 = b"VAULTV04"
 MAGIC_V3 = b"VAULTV03"
@@ -38,12 +40,14 @@ KDF_ITERS_V5 = 600000     # OWASP 2026 Gold Standard (600,000 rounds)
 STATE_NORMAL_LOCKED = 0
 STATE_LOCK_IN_PROGRESS = 1
 STATE_UNLOCK_IN_PROGRESS = 2
+FLAG_GIBBERISH_NAME = 4
 
 EXCLUDED_EXTS = {
     ".bat", ".cmd", ".ps1", ".py", ".html", ".sh", ".git", ".gitignore", ".env", ".log"
 }
 EXCLUDED_DIRS = {
-    "tools", ".vault", ".git", "__pycache__", "node_modules", ".vscode", ".idea"
+    "tools", ".vault", ".git", "__pycache__", "node_modules", ".vscode", ".idea",
+    "bin", "cmd", "installers", "android", "test_samples"
 }
 
 CRYPTO_BACKEND = None
@@ -223,14 +227,16 @@ def check_file_status(filepath):
                 if v == 5:
                     if flen == FOOTER_LEN_V5_RESUMABLE:
                         checkpoint, fails, state = struct.unpack("<QHH", foot[92:104])
-                        if state == STATE_UNLOCK_IN_PROGRESS:
+                        if state & 3 == STATE_UNLOCK_IN_PROGRESS:
                             return f"locked (V5 RESUMABLE UNLOCK INTERRUPTED at {checkpoint/1024/1024:.2f} MB)"
-                        elif state == STATE_LOCK_IN_PROGRESS:
+                        elif state & 3 == STATE_LOCK_IN_PROGRESS:
                             return f"locked (V5 RESUMABLE LOCK INTERRUPTED at {checkpoint/1024/1024:.2f} MB)"
                     else:
-                        fails, _ = struct.unpack("<HH", foot[92:96])
+                        fails, state = struct.unpack("<HH", foot[92:96])
                     
                     status_lbl = "V5 Authenticated AEAD (100% Full-File)"
+                    if state & FLAG_GIBBERISH_NAME:
+                        status_lbl += " [Gibberish Name]"
                     if fails >= 5:
                         return f"locked ({status_lbl} - LOCKOUT: {fails} fails)"
                     return f"locked ({status_lbl})"
@@ -247,10 +253,10 @@ def check_file_status(filepath):
     except Exception:
         return "invalid"
 
-def lock_file_v5(filepath, password):
+def lock_file_v5(filepath, password, gibberish=False):
     size = os.path.getsize(filepath)
     if size < 1:
-        return False, "File is empty (0 bytes)"
+        return False, "File is empty (0 bytes)", filepath
     fname = os.path.basename(filepath)
     start_t = time.time()
 
@@ -259,13 +265,13 @@ def lock_file_v5(filepath, password):
             v, foot, flen = read_footer(f, size)
             if v == 5 and flen == FOOTER_LEN_V5_RESUMABLE:
                 checkpoint, fails, state = struct.unpack("<QHH", foot[92:104])
-                if state == STATE_LOCK_IN_PROGRESS:
+                if (state & 3) == STATE_LOCK_IN_PROGRESS:
                     # Resume interrupted lock operation forward
                     salt = foot[12:28]
                     nonce = foot[28:44]
                     enc_key, mac_key, auth_tag = derive_keys_v5(password, salt)
                     if not hmac.compare_digest(foot[76:92], auth_tag):
-                        return False, "INCORRECT PASSWORD during resume"
+                        return False, "INCORRECT PASSWORD during resume", filepath
 
                     data_len = size - FOOTER_LEN_V5_RESUMABLE
                     pos = checkpoint
@@ -315,10 +321,10 @@ def lock_file_v5(filepath, password):
 
                     if size >= 5 * 1024 * 1024:
                         sys.stdout.write("\n")
-                    return True, f"Resumed & Finalized 100% Full-File AEAD ({data_len} bytes)"
+                    return True, f"Resumed & Finalized 100% Full-File AEAD ({data_len} bytes)", filepath
 
             if v and v != "damaged":
-                return False, "Already locked"
+                return False, "Already locked", filepath
 
             salt = os.urandom(16)
             nonce = os.urandom(16)
@@ -326,6 +332,18 @@ def lock_file_v5(filepath, password):
 
             f.seek(0, os.SEEK_END)
             data_len = f.tell()
+
+            meta_len = 0
+            meta_bytes = b""
+            if gibberish:
+                name_bytes = fname.encode("utf-8")
+                name_len = len(name_bytes)
+                start_block = (data_len + 15) // 16
+                enc_name = aes_ctr_process(enc_key, nonce, name_bytes, initial_counter=start_block)
+                meta_bytes = struct.pack("<H", name_len) + enc_name
+                meta_len = len(meta_bytes)
+                f.seek(data_len)
+                f.write(meta_bytes)
 
             # Initialize and append V5 Resumable Footer (104 bytes) with STATE_LOCK_IN_PROGRESS atomically
             initial_footer = (
@@ -337,7 +355,7 @@ def lock_file_v5(filepath, password):
                 auth_tag +
                 struct.pack("<QHH", 0, 0, STATE_LOCK_IN_PROGRESS)  # Checkpoint=0, fails=0, state=LockInProgress
             )
-            f.seek(0, os.SEEK_END)
+            f.seek(data_len + meta_len)
             f.write(initial_footer)
             sync_file_to_disk(f)
 
@@ -366,25 +384,39 @@ def lock_file_v5(filepath, password):
                 # Physical Flash Write Barrier: Sync data to disk before advancing checkpoint
                 if pos - last_sync_pos >= 1024 * 1024 or pos == data_len:
                     sync_file_to_disk(f)
-                    f.seek(data_len + 92)
+                    f.seek(data_len + meta_len + 92)
                     f.write(struct.pack("<Q", pos))
                     sync_file_to_disk(f)
                     last_sync_pos = pos
 
                 render_progress(fname, pos, data_len, start_t, "Locking")
 
+            if gibberish:
+                hmac_calc.update(meta_bytes)
+
             master_mac = hmac_calc.digest()
 
             # Mark state as STATE_NORMAL_LOCKED with final MasterMAC and fsync
-            f.seek(data_len + 44)
+            f.seek(data_len + meta_len + 44)
             f.write(master_mac)
-            f.seek(data_len + 92)
-            f.write(struct.pack("<QHH", data_len, 0, STATE_NORMAL_LOCKED))
+            f.seek(data_len + meta_len + 92)
+            final_flags = STATE_NORMAL_LOCKED | (FLAG_GIBBERISH_NAME if gibberish else 0)
+            f.write(struct.pack("<QHH", data_len, 0, final_flags))
             sync_file_to_disk(f)
             clear_progress_line()
-            return True, f"100% Full-File AEAD Resumable Armor ({data_len} bytes, 600k PBKDF2)"
+
+        if gibberish:
+            gib_name = os.urandom(8).hex() + ".vault"
+            new_path = os.path.join(os.path.dirname(filepath), gib_name)
+            try:
+                os.rename(filepath, new_path)
+                return True, f"100% Full-File AEAD Armor (Gibberish: {gib_name})", new_path
+            except Exception as e:
+                return True, f"100% Full-File AEAD Armor (Rename failed: {e})", filepath
+
+        return True, f"100% Full-File AEAD Resumable Armor ({data_len} bytes, 600k PBKDF2)", filepath
     except Exception as e:
-        return False, f"Error: {e}"
+        return False, f"Error: {e}", filepath
 
 def unlock_file_v5(filepath, password):
     size = os.path.getsize(filepath)
@@ -395,9 +427,22 @@ def unlock_file_v5(filepath, password):
         with open(filepath, "r+b") as f:
             version, footer, footer_len = read_footer(f, size)
             if not version:
-                return False, "Not locked"
+                return False, "Not locked", filepath
 
-            data_len = size - footer_len
+            has_gibberish = False
+            checkpoint = 0
+            fails = 0
+            state = STATE_NORMAL_LOCKED
+
+            if footer_len == FOOTER_LEN_V5_RESUMABLE:
+                checkpoint, fails, state = struct.unpack("<QHH", footer[92:104])
+                has_gibberish = bool(state & FLAG_GIBBERISH_NAME)
+            else:
+                fails, state = struct.unpack("<HH", footer[92:96])
+                has_gibberish = bool(state & FLAG_GIBBERISH_NAME)
+
+            total_cipher_len = size - footer_len
+            data_len = checkpoint if has_gibberish else total_cipher_len
 
             if version == 5:
                 salt = footer[12:28]
@@ -405,17 +450,8 @@ def unlock_file_v5(filepath, password):
                 stored_mac = footer[44:76]
                 stored_auth_tag = footer[76:92]
 
-                checkpoint = 0
-                fails = 0
-                state = STATE_NORMAL_LOCKED
-
-                if footer_len == FOOTER_LEN_V5_RESUMABLE:
-                    checkpoint, fails, state = struct.unpack("<QHH", footer[92:104])
-                else:
-                    fails, _ = struct.unpack("<HH", footer[92:96])
-
                 if fails >= 10:
-                    return False, f"BRUTE-FORCE LOCKOUT ACTIVE ({fails} failed attempts). Cooldown required."
+                    return False, f"BRUTE-FORCE LOCKOUT ACTIVE ({fails} failed attempts). Cooldown required.", filepath
 
                 enc_key, mac_key, computed_auth_tag = derive_keys_v5(password, salt)
 
@@ -429,10 +465,10 @@ def unlock_file_v5(filepath, password):
                         f.write(struct.pack("<HH", fails, 1))
                     sync_file_to_disk(f)
                     rem = max(0, 10 - fails)
-                    return False, f"INCORRECT PASSWORD ({fails} failed attempts, {rem} left before lockout)"
+                    return False, f"INCORRECT PASSWORD ({fails} failed attempts, {rem} left before lockout)", filepath
 
                 # CASE 1: Rollback an interrupted LOCK operation (User wants to decrypt partially locked file)
-                if state == STATE_LOCK_IN_PROGRESS and checkpoint > 0:
+                if (state & 3) == STATE_LOCK_IN_PROGRESS and checkpoint > 0:
                     rollback_len = min(checkpoint, data_len)
                     pos = 0
                     block_idx = 0
@@ -456,11 +492,11 @@ def unlock_file_v5(filepath, password):
                     sync_file_to_disk(f)
                     if size >= 5 * 1024 * 1024:
                         sys.stdout.write("\n")
-                    return True, f"Rolled Back Interrupted Lock & Fully Restored Original ({data_len} bytes)"
+                    return True, f"Rolled Back Interrupted Lock & Fully Restored Original ({data_len} bytes)", filepath
 
                 # CASE 2: Resume an interrupted UNLOCK operation
                 start_pos = 0
-                if state == STATE_UNLOCK_IN_PROGRESS and checkpoint > 0:
+                if (state & 3) == STATE_UNLOCK_IN_PROGRESS and checkpoint > 0:
                     start_pos = checkpoint
                 else:
                     # Verify MAC before starting fresh unlock
@@ -468,22 +504,38 @@ def unlock_file_v5(filepath, password):
                     hmac_verify = hmac.new(mac_key, digestmod=hashlib.sha256)
                     p = 0
                     verify_t = time.time()
-                    while p < data_len:
-                        t = min(CHUNK_SIZE_V5, data_len - p)
+                    while p < total_cipher_len:
+                        t = min(CHUNK_SIZE_V5, total_cipher_len - p)
                         hmac_verify.update(f.read(t))
                         p += t
-                        render_progress(fname, p, data_len, verify_t, "Verifying")
+                        render_progress(fname, p, total_cipher_len, verify_t, "Verifying")
 
                     computed_mac = hmac_verify.digest()
                     if not hmac.compare_digest(stored_mac, computed_mac):
                         clear_progress_line()
-                        return False, "INTEGRITY ERROR: Ciphertext has been modified or corrupted! Decryption halted."
+                        return False, "INTEGRITY ERROR: Ciphertext has been modified or corrupted! Decryption halted.", filepath
 
                     # Mark state as UnlockInProgress in footer with fsync
                     if footer_len == FOOTER_LEN_V5_RESUMABLE:
-                        f.seek(data_len + 92)
-                        f.write(struct.pack("<QHH", 0, fails, STATE_UNLOCK_IN_PROGRESS))
+                        f.seek(total_cipher_len + 92)
+                        st_unlock = STATE_UNLOCK_IN_PROGRESS | (FLAG_GIBBERISH_NAME if has_gibberish else 0)
+                        f.write(struct.pack("<QHH", 0, fails, st_unlock))
                         sync_file_to_disk(f)
+
+                restored_orig_name = None
+                if has_gibberish:
+                    f.seek(data_len)
+                    len_bytes = f.read(2)
+                    if len(len_bytes) == 2:
+                        name_len = struct.unpack("<H", len_bytes)[0]
+                        if 0 < name_len < 2048:
+                            enc_name = f.read(name_len)
+                            start_block = (data_len + 15) // 16
+                            dec_name = aes_ctr_process(enc_key, nonce, enc_name, initial_counter=start_block)
+                            try:
+                                restored_orig_name = dec_name.decode("utf-8")
+                            except Exception:
+                                restored_orig_name = None
 
                 # Decrypt in-place from start_pos to data_len
                 pos = start_pos
@@ -509,7 +561,7 @@ def unlock_file_v5(filepath, password):
                     if footer_len == FOOTER_LEN_V5_RESUMABLE:
                         if pos - last_sync_pos >= 1024 * 1024 or pos == data_len:
                             sync_file_to_disk(f)
-                            f.seek(data_len + 92)
+                            f.seek(total_cipher_len + 92)
                             f.write(struct.pack("<Q", pos))
                             sync_file_to_disk(f)
                             last_sync_pos = pos
@@ -520,12 +572,25 @@ def unlock_file_v5(filepath, password):
                 sync_file_to_disk(f)
                 f.truncate(data_len)
                 sync_file_to_disk(f)
+                f.close()
 
                 clear_progress_line()
 
+                if has_gibberish and restored_orig_name:
+                    dir_name = os.path.dirname(filepath)
+                    restored_path = os.path.join(dir_name, restored_orig_name)
+                    if os.path.exists(restored_path) and restored_path != filepath:
+                        base, ext = os.path.splitext(restored_orig_name)
+                        restored_path = os.path.join(dir_name, f"{base}_restored{ext}")
+                    try:
+                        os.rename(filepath, restored_path)
+                        return True, f"Verified & Restored original file {os.path.basename(restored_path)} ({data_len} bytes)", restored_path
+                    except Exception as e:
+                        return True, f"Verified & Restored ({data_len} bytes), rename failed: {e}", filepath
+
                 if start_pos > 0:
-                    return True, f"Resumed & Fully Restored ({data_len} bytes, resumed from {start_pos/1024/1024:.2f} MB)"
-                return True, f"Verified & Restored 100% full file ({data_len} bytes)"
+                    return True, f"Resumed & Fully Restored ({data_len} bytes, resumed from {start_pos/1024/1024:.2f} MB)", filepath
+                return True, f"Verified & Restored 100% full file ({data_len} bytes)", filepath
 
             elif version == 4:
                 chunk_size = struct.unpack("<I", footer[8:12])[0]
@@ -535,7 +600,7 @@ def unlock_file_v5(filepath, password):
                 fails, _ = struct.unpack("<HH", footer[76:80])
 
                 if fails >= 10:
-                    return False, f"BRUTE-FORCE LOCKOUT ACTIVE ({fails} failed attempts)."
+                    return False, f"BRUTE-FORCE LOCKOUT ACTIVE ({fails} failed attempts).", filepath
 
                 key, auth_hash = derive_legacy_key(password, salt, version=4)
                 if not hmac.compare_digest(stored_auth, auth_hash):
@@ -543,7 +608,7 @@ def unlock_file_v5(filepath, password):
                     f.seek(size - 4)
                     f.write(struct.pack("<HH", fails, 0))
                     sync_file_to_disk(f)
-                    return False, "INCORRECT PASSWORD"
+                    return False, "INCORRECT PASSWORD", filepath
 
                 is_full = (chunk_size == 0)
                 if is_full:
@@ -564,7 +629,7 @@ def unlock_file_v5(filepath, password):
                     sync_file_to_disk(f)
                     f.truncate(data_len)
                     sync_file_to_disk(f)
-                    return True, f"Restored V4 full file ({data_len} bytes) - [MIGRATION ADVISORY: Legacy format without HMAC integrity. Re-lock with V5]"
+                    return True, f"Restored V4 full file ({data_len} bytes) - [MIGRATION ADVISORY: Legacy format without HMAC integrity. Re-lock with V5]", filepath
                 else:
                     f.seek(0)
                     enc_header = f.read(chunk_size)
@@ -574,7 +639,7 @@ def unlock_file_v5(filepath, password):
                     sync_file_to_disk(f)
                     f.truncate(data_len)
                     sync_file_to_disk(f)
-                    return True, f"Restored V4 header ({chunk_size} bytes) - [MIGRATION ADVISORY: Legacy format. Re-lock with V5]"
+                    return True, f"Restored V4 header ({chunk_size} bytes) - [MIGRATION ADVISORY: Legacy format. Re-lock with V5]", filepath
 
             else:
                 chunk_size = struct.unpack("<I", footer[8:12])[0]
@@ -584,7 +649,7 @@ def unlock_file_v5(filepath, password):
 
                 key, auth_hash = derive_legacy_key(password, salt, version=version)
                 if not hmac.compare_digest(stored_auth, auth_hash):
-                    return False, "INCORRECT PASSWORD"
+                    return False, "INCORRECT PASSWORD", filepath
 
                 f.seek(0)
                 enc_header = f.read(chunk_size)
@@ -594,10 +659,10 @@ def unlock_file_v5(filepath, password):
                 sync_file_to_disk(f)
                 f.truncate(data_len)
                 sync_file_to_disk(f)
-                return True, f"Restored legacy V{version} header ({chunk_size} bytes) - [MIGRATION ADVISORY: Legacy format. Re-lock with V5]"
+                return True, f"Restored legacy V{version} header ({chunk_size} bytes) - [MIGRATION ADVISORY: Legacy format. Re-lock with V5]", filepath
 
     except Exception as e:
-        return False, f"Error: {e}"
+        return False, f"Error: {e}", filepath
 
 def resolve_targets(path):
     path = os.path.abspath(path.strip('\'"'))
@@ -611,7 +676,13 @@ def resolve_targets(path):
 
     target_files = []
     for root, dirs, files in os.walk(path, followlinks=False):
-        dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED_DIRS and not d.startswith(".") and not os.path.islink(os.path.join(root, d))]
+        dirs[:] = [
+            d for d in dirs
+            if d.lower() not in EXCLUDED_DIRS
+            and not d.lower().startswith("releases")
+            and not d.startswith(".")
+            and not os.path.islink(os.path.join(root, d))
+        ]
         for file in files:
             full_file_path = os.path.join(root, file)
             if file.startswith(".") or os.path.islink(full_file_path):
@@ -622,15 +693,19 @@ def resolve_targets(path):
             target_files.append(full_file_path)
     return target_files
 
-def process_targets(action, path, password=None):
+def process_targets(action, path, password=None, gibberish=False):
     targets = resolve_targets(path)
 
     print("=" * 70)
-    print(f"  Universal Vault V5 (Enterprise Grade): {action.upper()} Operation")
+    print(f"  Universal Vault v{VERSION} (Python Engine): {action.upper()} Operation")
     print(f"  Target Scope: {os.path.abspath(path.strip('\'\"'))}")
     print(f"  Files Identified: {len(targets)}")
     if action == "lock":
         print(f"  Armor Mode: 100% Full-File Resumable AEAD (Stream Encrypt-then-MAC)")
+        if gibberish:
+            print(f"  File Names: Format to Gibberish (16-Hex Hash .vault)")
+        else:
+            print(f"  File Names: Standard In-Place")
         print(f"  Security: 600,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256")
         print(f"  Fault Tolerance: Checkpointed In-Place Streaming (Crash-Safe Resumable)")
     print("=" * 70)
@@ -662,33 +737,45 @@ def process_targets(action, path, password=None):
     for p in targets:
         rel = os.path.relpath(p, path) if os.path.isdir(path) else os.path.basename(p)
         if action == "lock":
-            ok, msg = lock_file_v5(p, password)
+            ok, msg, new_p = lock_file_v5(p, password, gibberish=gibberish)
         else:
-            ok, msg = unlock_file_v5(p, password)
+            ok, msg, new_p = unlock_file_v5(p, password)
 
         clear_progress_line()
-        print(f"Processing: {rel}... ", end="")
-
-        if ok:
-            print(f"[SUCCESS: {msg}]")
+        if ok and new_p and new_p != p:
+            new_rel = os.path.relpath(new_p, path) if os.path.isdir(path) else os.path.basename(new_p)
+            print(f"Processing: {rel} -> {new_rel}... [SUCCESS: {msg}]")
+            success_count += 1
+        elif ok:
+            print(f"Processing: {rel}... [SUCCESS: {msg}]")
             success_count += 1
         elif "Already locked" in msg or "Not locked" in msg or "empty" in msg:
-            print(f"[SKIPPED: {msg}]")
+            print(f"Processing: {rel}... [SKIPPED: {msg}]")
             skip_count += 1
         else:
-            print(f"[FAILED: {msg}]")
+            print(f"Processing: {rel}... [FAILED: {msg}]")
             fail_count += 1
 
     print("-" * 70)
     print(f"Summary: {success_count} Succeeded | {skip_count} Skipped | {fail_count} Failed\n")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Universal Vault V5: Authenticated Full-File In-Place Encryption Suite")
-    parser.add_argument("action", choices=["lock", "unlock", "status"], help="Action to perform")
+    if len(sys.argv) > 1 and sys.argv[1].lower() in ("version", "-v", "--version"):
+        print(f"Universal Vault CLI v{VERSION} (Python Architecture)")
+        sys.exit(0)
+
+    parser = argparse.ArgumentParser(description=f"Universal Vault v{VERSION}: Authenticated Full-File In-Place Encryption Suite")
+    parser.add_argument("action", choices=["lock", "unlock", "status", "version"], help="Action to perform")
     parser.add_argument("path", nargs="?", default=".", help="Specific file or directory path (default: current directory)")
     parser.add_argument("-p", "--password", help="Master password (optional, prompted securely if omitted)")
+    parser.add_argument("-g", "--gibberish", action="store_true", help="Format file names to random 16-hex hashes with .vault extension")
+    parser.add_argument("-v", "--version", action="version", version=f"Universal Vault CLI v{VERSION} (Python Architecture)")
 
     args = parser.parse_args()
+
+    if args.action == "version":
+        print(f"Universal Vault CLI v{VERSION} (Python Architecture)")
+        sys.exit(0)
 
     password = args.password
     if args.action in ("lock", "unlock") and not password:
@@ -702,4 +789,4 @@ if __name__ == "__main__":
             print("Error: Password cannot be empty.")
             sys.exit(1)
 
-    process_targets(args.action, args.path, password)
+    process_targets(args.action, args.path, password, gibberish=args.gibberish)

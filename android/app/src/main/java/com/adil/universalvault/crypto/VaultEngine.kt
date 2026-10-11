@@ -129,6 +129,12 @@ object VaultEngine {
     const val STATE_NORMAL_LOCKED = 0
     const val STATE_LOCK_IN_PROGRESS = 1
     const val STATE_UNLOCK_IN_PROGRESS = 2
+    const val FLAG_GIBBERISH_NAME = 4
+
+    data class VaultOperationResult(
+        val message: String,
+        val newFileName: String? = null
+    )
 
     data class FooterInfo(
         val version: Int,
@@ -274,8 +280,17 @@ object VaultEngine {
             )
         }
 
-        val dataLen = size - footer.length
-        if (footer.stateFlags == STATE_LOCK_IN_PROGRESS && footer.checkpoint > 0) {
+        val hasGibberish = (footer.stateFlags and FLAG_GIBBERISH_NAME) != 0
+        val isInterruptedLock = (footer.stateFlags and 3) == STATE_LOCK_IN_PROGRESS
+        val isInterruptedUnlock = (footer.stateFlags and 3) == STATE_UNLOCK_IN_PROGRESS
+        val totalCipherLen = size - footer.length
+        val dataLen = if (hasGibberish && footer.checkpoint > 0 && footer.checkpoint < totalCipherLen) {
+            footer.checkpoint
+        } else {
+            totalCipherLen
+        }
+
+        if (isInterruptedLock && footer.checkpoint > 0) {
             val mb = footer.checkpoint.toDouble() / (1024 * 1024)
             return VaultStatus(
                 isLocked = true,
@@ -287,7 +302,7 @@ object VaultEngine {
             )
         }
 
-        if (footer.stateFlags == STATE_UNLOCK_IN_PROGRESS && footer.checkpoint > 0) {
+        if (isInterruptedUnlock && footer.checkpoint > 0) {
             val mb = footer.checkpoint.toDouble() / (1024 * 1024)
             return VaultStatus(
                 isLocked = true,
@@ -299,10 +314,11 @@ object VaultEngine {
             )
         }
 
+        val gibLabel = if (hasGibberish) " [Gibberish Name]" else ""
         return VaultStatus(
             isLocked = true,
             version = 5,
-            details = "Locked (V5 Authenticated AEAD 100% Full-File)",
+            details = "Locked (V5 Authenticated AEAD 100% Full-File$gibLabel)",
             isInterrupted = false,
             dataLength = dataLen
         )
@@ -312,15 +328,19 @@ object VaultEngine {
         channel: FileChannel,
         size: Long,
         password: String,
+        gibberish: Boolean = false,
+        originalFileName: String? = null,
         listener: ProgressListener? = null
-    ): Result<String> = lock(FileChannelVaultChannel(channel), size, password, listener)
+    ): Result<VaultOperationResult> = lock(FileChannelVaultChannel(channel), size, password, gibberish, originalFileName, listener)
 
     fun lock(
         channel: VaultChannel,
         size: Long,
         password: String,
+        gibberish: Boolean = false,
+        originalFileName: String? = null,
         listener: ProgressListener? = null
-    ): Result<String> {
+    ): Result<VaultOperationResult> {
         if (size == 0L) {
             return Result.failure(IllegalArgumentException("File is empty (0 bytes)"))
         }
@@ -328,7 +348,7 @@ object VaultEngine {
         val existingFooter = readFooter(channel, size)
         if (existingFooter != null) {
             // Check if resuming an interrupted lock
-            if (existingFooter.stateFlags == STATE_LOCK_IN_PROGRESS && existingFooter.checkpoint > 0) {
+            if ((existingFooter.stateFlags and 3) == STATE_LOCK_IN_PROGRESS && existingFooter.checkpoint > 0) {
                 return resumeLock(channel, size, existingFooter, password, listener)
             }
             return Result.failure(IllegalStateException("File is already locked"))
@@ -342,8 +362,33 @@ object VaultEngine {
         val (encKey, macKey, authTag) = deriveKeys(password, salt)
         val dataLen = size
 
-        // 1. Write initial 104-byte header at EOF with STATE_LOCK_IN_PROGRESS
-        channel.position(dataLen)
+        val hasGibberish = gibberish && !originalFileName.isNullOrEmpty()
+        val origNameBytes = if (hasGibberish) originalFileName!!.toByteArray(Charsets.UTF_8) else null
+        val metaLen = if (origNameBytes != null) 2 + origNameBytes.size else 0
+        val totalCipherLen = dataLen + metaLen
+
+        val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+        val keySpec = SecretKeySpec(encKey, "AES")
+
+        // Write encrypted filename metadata before footer if gibberish
+        if (origNameBytes != null) {
+            val metaBlockOffset = (dataLen + 15) / 16
+            val metaCounter = makeCounter(nonce, metaBlockOffset)
+            val metaCipher = Cipher.getInstance("AES/CTR/NoPadding")
+            metaCipher.init(Cipher.ENCRYPT_MODE, keySpec, IvParameterSpec(metaCounter))
+            val encName = metaCipher.doFinal(origNameBytes)
+
+            val metaBuf = ByteBuffer.allocate(metaLen).order(ByteOrder.LITTLE_ENDIAN)
+            metaBuf.putShort(origNameBytes.size.toShort())
+            metaBuf.put(encName)
+            metaBuf.flip()
+
+            channel.position(dataLen)
+            channel.write(metaBuf)
+        }
+
+        // 1. Write initial 104-byte header at totalCipherLen with STATE_LOCK_IN_PROGRESS
+        channel.position(totalCipherLen)
         val initialBuf = ByteBuffer.allocate(FOOTER_LEN_V5_RESUMABLE).order(ByteOrder.LITTLE_ENDIAN)
         initialBuf.put(MAGIC_V5.toByteArray(Charsets.US_ASCII))
         initialBuf.putInt(CHUNK_SIZE_V5)
@@ -358,8 +403,6 @@ object VaultEngine {
         channel.write(initialBuf)
         channel.force(true)
 
-        val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-        val keySpec = SecretKeySpec(encKey, "AES")
         val hmac = Mac.getInstance("HmacSHA256").apply {
             init(SecretKeySpec(macKey, "HmacSHA256"))
         }
@@ -391,7 +434,7 @@ object VaultEngine {
 
             if (pos - lastSyncPos >= 1024 * 1024 || pos == dataLen) {
                 channel.force(true)
-                channel.position(dataLen + 92)
+                channel.position(totalCipherLen + 92)
                 val chkBuf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(pos)
                 chkBuf.flip()
                 channel.write(chkBuf)
@@ -406,21 +449,34 @@ object VaultEngine {
             listener?.onProgress("Encrypting", pos, dataLen, speed, etaSec)
         }
 
+        if (origNameBytes != null) {
+            channel.position(dataLen)
+            val metaReadBuf = ByteBuffer.allocate(metaLen)
+            channel.read(metaReadBuf)
+            hmac.update(metaReadBuf.array())
+        }
+
         // Finalize Master MAC & seal footer
         val masterMac = hmac.doFinal()
-        channel.position(dataLen + 44)
+        channel.position(totalCipherLen + 44)
         channel.write(ByteBuffer.wrap(masterMac))
 
-        channel.position(dataLen + 92)
+        channel.position(totalCipherLen + 92)
         val finalTail = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
         finalTail.putLong(dataLen)
         finalTail.putShort(0.toShort())
-        finalTail.putShort(STATE_NORMAL_LOCKED.toShort())
+        val finalFlags = if (hasGibberish) STATE_NORMAL_LOCKED or FLAG_GIBBERISH_NAME else STATE_NORMAL_LOCKED
+        finalTail.putShort(finalFlags.toShort())
         finalTail.flip()
         channel.write(finalTail)
         channel.force(true)
 
-        return Result.success("100% Full-File AEAD Armor Sealed ($dataLen bytes)")
+        val gibberishFileName = if (hasGibberish) {
+            val randBytes = ByteArray(8).also { secureRandom.nextBytes(it) }
+            randBytes.joinToString("") { "%02x".format(it) } + ".vault"
+        } else null
+
+        return Result.success(VaultOperationResult("100% Full-File AEAD Armor Sealed ($dataLen bytes)", gibberishFileName))
     }
 
     private fun resumeLock(
@@ -429,13 +485,19 @@ object VaultEngine {
         footer: FooterInfo,
         password: String,
         listener: ProgressListener?
-    ): Result<String> {
+    ): Result<VaultOperationResult> {
         val (encKey, macKey, authTag) = deriveKeys(password, footer.salt)
         if (!MessageDigest.isEqual(authTag, footer.authTag)) {
             return Result.failure(SecurityException("Incorrect password"))
         }
 
-        val dataLen = size - footer.length
+        val hasGibberish = (footer.stateFlags and FLAG_GIBBERISH_NAME) != 0
+        val totalCipherLen = size - footer.length
+        val dataLen = if (hasGibberish && footer.checkpoint > 0 && footer.checkpoint < totalCipherLen) {
+            footer.checkpoint
+        } else {
+            totalCipherLen
+        }
         val cipher = Cipher.getInstance("AES/CTR/NoPadding")
         val keySpec = SecretKeySpec(encKey, "AES")
 
@@ -464,7 +526,7 @@ object VaultEngine {
 
             if (pos - lastSyncPos >= 1024 * 1024 || pos == dataLen) {
                 channel.force(true)
-                channel.position(dataLen + 92)
+                channel.position(totalCipherLen + 92)
                 val chkBuf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(pos)
                 chkBuf.flip()
                 channel.write(chkBuf)
@@ -479,14 +541,14 @@ object VaultEngine {
             listener?.onProgress("Encrypting", pos, dataLen, speed, etaSec)
         }
 
-        // Recompute master MAC over entire ciphertext
+        // Recompute master MAC over entire ciphertext (0 to totalCipherLen)
         val hmac = Mac.getInstance("HmacSHA256").apply {
             init(SecretKeySpec(macKey, "HmacSHA256"))
         }
         var p = 0L
         val sealStartTime = System.currentTimeMillis()
-        while (p < dataLen) {
-            val take = minOf(CHUNK_SIZE_V5.toLong(), dataLen - p).toInt()
+        while (p < totalCipherLen) {
+            val take = minOf(CHUNK_SIZE_V5.toLong(), totalCipherLen - p).toInt()
             channel.position(p)
             val byteBuf = ByteBuffer.wrap(chunkBuf, 0, take)
             channel.read(byteBuf)
@@ -495,25 +557,26 @@ object VaultEngine {
 
             val elapsedSec = maxOf(0.001, (System.currentTimeMillis() - sealStartTime) / 1000.0)
             val speed = (p / elapsedSec) / (1024 * 1024)
-            val remBytes = dataLen - p
+            val remBytes = totalCipherLen - p
             val etaSec = if (speed > 0) (remBytes / (speed * 1024 * 1024)).toLong() else 0L
-            listener?.onProgress("Sealing HMAC", p, dataLen, speed, etaSec)
+            listener?.onProgress("Sealing HMAC", p, totalCipherLen, speed, etaSec)
         }
 
         val masterMac = hmac.doFinal()
-        channel.position(dataLen + 44)
+        channel.position(totalCipherLen + 44)
         channel.write(ByteBuffer.wrap(masterMac))
 
-        channel.position(dataLen + 92)
+        channel.position(totalCipherLen + 92)
         val finalTail = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
         finalTail.putLong(dataLen)
         finalTail.putShort(0.toShort())
-        finalTail.putShort(STATE_NORMAL_LOCKED.toShort())
+        val finalFlags = if (hasGibberish) STATE_NORMAL_LOCKED or FLAG_GIBBERISH_NAME else STATE_NORMAL_LOCKED
+        finalTail.putShort(finalFlags.toShort())
         finalTail.flip()
         channel.write(finalTail)
         channel.force(true)
 
-        return Result.success("Resumed & Finalized 100% Full-File AEAD ($dataLen bytes)")
+        return Result.success(VaultOperationResult("Resumed & Finalized 100% Full-File AEAD ($dataLen bytes)"))
     }
 
     fun unlock(
@@ -521,18 +584,26 @@ object VaultEngine {
         size: Long,
         password: String,
         listener: ProgressListener? = null
-    ): Result<String> = unlock(FileChannelVaultChannel(channel), size, password, listener)
+    ): Result<VaultOperationResult> = unlock(FileChannelVaultChannel(channel), size, password, listener)
 
     fun unlock(
         channel: VaultChannel,
         size: Long,
         password: String,
         listener: ProgressListener? = null
-    ): Result<String> {
+    ): Result<VaultOperationResult> {
         val footer = readFooter(channel, size)
             ?: return Result.failure(IllegalStateException("File is not locked or has unsupported format"))
 
-        val dataLen = size - footer.length
+        val hasGibberish = (footer.stateFlags and FLAG_GIBBERISH_NAME) != 0
+        val isInterruptedLock = (footer.stateFlags and 3) == STATE_LOCK_IN_PROGRESS
+        val isInterruptedUnlock = (footer.stateFlags and 3) == STATE_UNLOCK_IN_PROGRESS
+        val totalCipherLen = size - footer.length
+        val dataLen = if (hasGibberish && footer.checkpoint > 0 && footer.checkpoint < totalCipherLen) {
+            footer.checkpoint
+        } else {
+            totalCipherLen
+        }
 
         listener?.onProgress("Key Derivation", 0L, dataLen, 0.0, 0L)
         val (encKey, macKey, authTag) = deriveKeys(password, footer.salt)
@@ -553,7 +624,7 @@ object VaultEngine {
         val chunkBuf = ByteArray(CHUNK_SIZE_V5)
 
         // CASE 1: Rollback an interrupted lock operation
-        if (footer.stateFlags == STATE_LOCK_IN_PROGRESS && footer.checkpoint > 0) {
+        if (isInterruptedLock && footer.checkpoint > 0) {
             val rollbackLen = minOf(footer.checkpoint, dataLen)
             var pos = 0L
             var blockIdx = 0L
@@ -585,12 +656,12 @@ object VaultEngine {
             channel.force(true)
             channel.truncate(dataLen)
             channel.force(true)
-            return Result.success("Rolled back interrupted lock & fully restored original ($dataLen bytes)")
+            return Result.success(VaultOperationResult("Rolled back interrupted lock & fully restored original ($dataLen bytes)"))
         }
 
         // CASE 2: Master HMAC Verification (Anti-Tampering)
         var startPos = 0L
-        if (footer.stateFlags == STATE_UNLOCK_IN_PROGRESS && footer.checkpoint > 0) {
+        if (isInterruptedUnlock && footer.checkpoint > 0) {
             startPos = footer.checkpoint
         } else {
             val hmac = Mac.getInstance("HmacSHA256").apply {
@@ -598,8 +669,8 @@ object VaultEngine {
             }
             var p = 0L
             val verifyStartTime = System.currentTimeMillis()
-            while (p < dataLen) {
-                val take = minOf(CHUNK_SIZE_V5.toLong(), dataLen - p).toInt()
+            while (p < totalCipherLen) {
+                val take = minOf(CHUNK_SIZE_V5.toLong(), totalCipherLen - p).toInt()
                 channel.position(p)
                 val byteBuf = ByteBuffer.wrap(chunkBuf, 0, take)
                 channel.read(byteBuf)
@@ -608,9 +679,9 @@ object VaultEngine {
 
                 val elapsedSec = maxOf(0.001, (System.currentTimeMillis() - verifyStartTime) / 1000.0)
                 val speed = (p / elapsedSec) / (1024 * 1024)
-                val remBytes = dataLen - p
+                val remBytes = totalCipherLen - p
                 val etaSec = if (speed > 0) (remBytes / (speed * 1024 * 1024)).toLong() else 0L
-                listener?.onProgress("Verifying", p, dataLen, speed, etaSec)
+                listener?.onProgress("Verifying", p, totalCipherLen, speed, etaSec)
             }
 
             val computedMac = hmac.doFinal()
@@ -619,14 +690,38 @@ object VaultEngine {
             }
 
             if (footer.length == FOOTER_LEN_V5_RESUMABLE) {
-                channel.position(dataLen + 92)
+                channel.position(totalCipherLen + 92)
                 val stateBuf = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
                 stateBuf.putLong(0L)
                 stateBuf.putShort(footer.failedAttempts.toShort())
-                stateBuf.putShort(STATE_UNLOCK_IN_PROGRESS.toShort())
+                val stateFlags = if (hasGibberish) STATE_UNLOCK_IN_PROGRESS or FLAG_GIBBERISH_NAME else STATE_UNLOCK_IN_PROGRESS
+                stateBuf.putShort(stateFlags.toShort())
                 stateBuf.flip()
                 channel.write(stateBuf)
                 channel.force(true)
+            }
+        }
+
+        var restoredOrigName: String? = null
+        if (hasGibberish) {
+            try {
+                channel.position(dataLen)
+                val lenBuf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN)
+                channel.read(lenBuf)
+                lenBuf.flip()
+                val nameLen = lenBuf.getShort().toInt() and 0xFFFF
+                if (nameLen in 1..2047 && dataLen + 2 + nameLen <= totalCipherLen) {
+                    val encNameBuf = ByteBuffer.allocate(nameLen)
+                    channel.read(encNameBuf)
+                    val metaBlockOffset = (dataLen + 15) / 16
+                    val metaCounter = makeCounter(footer.nonce, metaBlockOffset)
+                    val metaCipher = Cipher.getInstance("AES/CTR/NoPadding")
+                    metaCipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(metaCounter))
+                    val decNameBytes = metaCipher.doFinal(encNameBuf.array())
+                    restoredOrigName = String(decNameBytes, Charsets.UTF_8)
+                }
+            } catch (e: Exception) {
+                // Ignore metadata read failure
             }
         }
 
@@ -656,7 +751,7 @@ object VaultEngine {
             if (footer.length == FOOTER_LEN_V5_RESUMABLE) {
                 if (pos - lastSyncPos >= 1024 * 1024 || pos == dataLen) {
                     channel.force(true)
-                    channel.position(dataLen + 92)
+                    channel.position(totalCipherLen + 92)
                     val chkBuf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(pos)
                     chkBuf.flip()
                     channel.write(chkBuf)
@@ -677,10 +772,14 @@ object VaultEngine {
         channel.truncate(dataLen)
         channel.force(true)
 
-        if (startPos > 0) {
+        val successMsg = if (restoredOrigName != null) {
+            "Verified & Restored original file $restoredOrigName ($dataLen bytes)"
+        } else if (startPos > 0) {
             val mb = startPos.toDouble() / (1024 * 1024)
-            return Result.success("Resumed & Fully Restored ($dataLen bytes, resumed from ${"%.2f".format(mb)} MB)")
+            "Resumed & Fully Restored ($dataLen bytes, resumed from ${"%.2f".format(mb)} MB)"
+        } else {
+            "Verified & Restored 100% full file ($dataLen bytes)"
         }
-        return Result.success("Verified & Restored 100% full file ($dataLen bytes)")
+        return Result.success(VaultOperationResult(successMsg, restoredOrigName))
     }
 }

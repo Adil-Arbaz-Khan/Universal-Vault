@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="Universal Vault Logo" width="160" style="border-radius: 28px; box-shadow: 0 10px 30px rgba(0,0,0,0.6);" />
 
-# 🛡️ Universal Vault V5.5.21
+# 🛡️ Universal Vault V5.5.3
 
 **Lightweight Sovereign Authenticated Encryption Suite (AEAD)**  
 *Ultra-Lightweight (<3 MB) • Global Terminal-First CLI • 100% In-Place Streaming • Portable by Design*
@@ -80,11 +80,11 @@ chmod +x install.sh
 *(Automatically detects native Apple Silicon M1/M2/M3/M4 or Intel, clears Gatekeeper quarantine flags, and registers `~/.local/bin` in `~/.zprofile` and `~/.zshrc`)*
 ### 4. Android (Native App & Complete Suite)
 * **Option A: Standalone APK (Recommended)**:
-  1. Download **`UniversalVault-v5.5.21.apk`** from [Releases](https://github.com/Adil-Arbaz-Khan/Universal-Vault/releases/tag/v5.5.21) or [universal-vault.pages.dev](https://universal-vault.pages.dev/).
+  1. Download **`UniversalVault-v5.5.3.apk`** from [Releases](https://github.com/Adil-Arbaz-Khan/Universal-Vault/releases/tag/v5.5.3) or [universal-vault.pages.dev](https://universal-vault.pages.dev/).
   2. Tap to install on your device (Android 8.0+ / API 26+ up to Android 15+).
-  3. Enjoy 100% in-place SAF streaming, hardware write barriers (`Os.fsync`), crash-safe resumption, real-time password strength meter, and custom cybernetic dark obsidian theme.
+  3. Enjoy 100% in-place SAF streaming, hardware write barriers (`Os.fsync`), crash-safe resumption, real-time password strength meter, gibberish filename masking, and custom cybernetic dark obsidian theme.
 * **Option B: Merged Android Bundle**:
-  * Download **`Universal-Vault-v5.5.21-Android.zip`** for a complete all-in-one archive containing the native APK, the portable offline web viewer (`Vault_App.html`), and Termux CLI scripts (`setup_termux.sh`, `lock.sh`, `unlock.sh`).
+  * Download **`Universal-Vault-v5.5.3-Android.zip`** for a complete all-in-one archive containing the native APK, the portable offline web viewer (`Vault_App.html`), and Termux CLI scripts (`setup_termux.sh`, `lock.sh`, `unlock.sh`).
 
 ---
 
@@ -175,17 +175,23 @@ vault lock "/data/projects/secret_repo"
 # Lock current directory:
 vault lock .
 
+# Disguise file names to randomized 16-hex hashes (e.g. 7f8a1c9e4b2d3f0a.vault):
+vault lock "Confidential.pdf" -g
+# or:
+vault lock "/data/projects/secret_repo" --gibberish
+
 # Inline password (for automated scripts / CI):
 vault lock "backup.tar" -p "MyMasterPassword123"
 ```
 
 ### 2. `vault unlock` — Decrypt & Verify Files
-Verifies master HMAC authenticity and restores files back to their exact original plaintext in-place.
+Verifies master HMAC authenticity and restores files back to their exact original plaintext in-place. If filenames were masked using gibberish mode (`-g`), the original filenames are automatically decrypted and restored!
 
 ```bash
 # Unlock a single file or directory:
 vault unlock "Confidential.pdf"
 vault unlock "/data/projects/secret_repo"
+vault unlock "7f8a1c9e4b2d3f0a.vault"   # Automatically restores original filename
 
 # Inline password:
 vault unlock "backup.tar" -p "MyMasterPassword123"
@@ -268,14 +274,14 @@ Verify binary integrity against published provenance hashes:
 
 | Platform | Binary / Asset | SHA-256 Checksum |
 | :--- | :--- | :--- |
-| **Windows x86_64** | `vault.exe` | `073d7e91b8567cbd7abfd72d88dd27179f4af14f3c4dfb56baf15b1513bf62c5` |
-| **Linux x86_64** | `vault_linux_amd64` | `6a23493fcfaae62124261ca198214f8d14a6e991e6f29ed2e42acbacf94bc507` |
-| **Linux ARM64** | `vault_linux_arm64` | `5fc97d7b6ff360b877109973279b20ddf8e4dea1088883a77aa5e57cb9cde418` |
-| **macOS Apple Silicon** | `vault_darwin_arm64` | `ab276353a3bebc347aced81fc5129a9cfe0fb619a9ed63544df3c831d5852c2d` |
-| **macOS Intel** | `vault_darwin_amd64` | `c2dcfb966321bc6380db372682c337e9480d41695167ee01b38ddc2f69237d20` |
-| **Android Native APK** | `UniversalVault-v5.5.21.apk` | `a491cfb5208668351562afdcd0493e991f03c3fa1ecbdaeafc8ffdcd68d26ff9` |
+| **Windows x86_64** | `vault.exe` | `eac39193ede2aabfa91a293ac9a97936828ce7a842a351cfbe184e8281af7960` |
+| **Linux x86_64** | `vault_linux_amd64` | `60e5966eb8175c092d55d7cd1e521f78ce797bef27d99744510e799c07380ab1` |
+| **Linux ARM64** | `vault_linux_arm64` | `799ffeb11c2bc1a68499468a83098481b42298adbeef6c2318b63dd4faf73e77` |
+| **macOS Apple Silicon** | `vault_darwin_arm64` | `eaf90f2b28acd879796ed618e5d8c82a569ee38e9794943bf5298df97f3325f0` |
+| **macOS Intel** | `vault_darwin_amd64` | `94c10f41a670268fdbe048278b3f5dba091f0c89fb2e8420778a30efd21fe7b9` |
+| **Android Native APK** | `UniversalVault-v5.5.3.apk` | `6f106c7d69ebfd8202e066c71904debfe9fe4090923310a542416d38de9a8065` |
 
-*Full verification guide and release history: [RELEASE_NOTES_v5.5.21.md](RELEASE_NOTES_v5.5.21.md)*
+*Full verification guide and release history: [RELEASE_NOTES_v5.5.3.md](RELEASE_NOTES_v5.5.3.md)*
 
 ---
 

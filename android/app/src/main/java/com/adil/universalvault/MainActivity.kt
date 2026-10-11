@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
                         prefs.edit().putBoolean("dark_mode", isDarkThemeState).apply()
                     },
                     onFileSelected = { uri -> loadFile(uri) },
-                    onLockClicked = { password -> executeLock(password) },
+                    onLockClicked = { password, gibberish -> executeLock(password, gibberish) },
                     onUnlockClicked = { password -> executeUnlock(password) },
                     onClearResult = { resultMessageState = null }
                 )
@@ -114,7 +114,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun executeLock(password: String) {
+    private fun executeLock(password: String, gibberish: Boolean) {
         val fileInfo = selectedFileState ?: return
         progressState = ProgressState(isRunning = true, phase = "Initializing...")
         resultMessageState = null
@@ -130,6 +130,8 @@ class MainActivity : ComponentActivity() {
                     channel = channel,
                     size = fileInfo.size,
                     password = password,
+                    gibberish = gibberish,
+                    originalFileName = fileInfo.name,
                     listener = object : VaultEngine.ProgressListener {
                         override fun onProgress(
                             phase: String,
@@ -157,12 +159,32 @@ class MainActivity : ComponentActivity() {
                 val newSize = channel.size()
                 pfd.close()
 
+                var finalName = fileInfo.name
+                val gibName = result.getOrNull()?.newFileName
+                if (gibName != null) {
+                    try {
+                        val renamedUri = android.provider.DocumentsContract.renameDocument(contentResolver, fileInfo.uri, gibName)
+                        if (renamedUri != null) {
+                            finalName = gibName
+                        }
+                    } catch (e: Exception) {
+                        // Some SAF document providers do not allow renaming
+                    }
+                }
+
                 withContext(Dispatchers.Main) {
                     progressState = ProgressState(isRunning = false)
                     if (result.isSuccess) {
-                        resultMessageState = result.getOrNull()
+                        val opRes = result.getOrNull()
+                        val msg = if (gibName != null) {
+                            "${opRes?.message} -> $gibName"
+                        } else {
+                            opRes?.message
+                        }
+                        resultMessageState = msg
                         isErrorState = false
                         selectedFileState = fileInfo.copy(
+                            name = finalName,
                             size = newSize,
                             status = newStatus
                         )
@@ -224,12 +246,32 @@ class MainActivity : ComponentActivity() {
                 val newSize = channel.size()
                 pfd.close()
 
+                var finalName = fileInfo.name
+                val restoredName = result.getOrNull()?.newFileName
+                if (restoredName != null) {
+                    try {
+                        val renamedUri = android.provider.DocumentsContract.renameDocument(contentResolver, fileInfo.uri, restoredName)
+                        if (renamedUri != null) {
+                            finalName = restoredName
+                        }
+                    } catch (e: Exception) {
+                        // Some SAF document providers do not allow renaming
+                    }
+                }
+
                 withContext(Dispatchers.Main) {
                     progressState = ProgressState(isRunning = false)
                     if (result.isSuccess) {
-                        resultMessageState = result.getOrNull()
+                        val opRes = result.getOrNull()
+                        val msg = if (restoredName != null) {
+                            "${opRes?.message} -> $restoredName"
+                        } else {
+                            opRes?.message
+                        }
+                        resultMessageState = msg
                         isErrorState = false
                         selectedFileState = fileInfo.copy(
+                            name = finalName,
                             size = newSize,
                             status = newStatus
                         )

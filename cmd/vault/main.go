@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	Version = "5.5.21"
+	Version = "5.5.3"
 
 	MagicV5 = "VAULTV05"
 	MagicV4 = "VAULTV04"
@@ -39,6 +39,7 @@ const (
 	StateNormalLocked      = 0
 	StateLockInProgress    = 1
 	StateUnlockInProgress  = 2
+	FlagGibberishName      = 4
 )
 
 var excludedExts = map[string]bool{
@@ -50,7 +51,7 @@ var excludedExts = map[string]bool{
 var excludedDirs = map[string]bool{
 	"tools": true, ".vault": true, ".git": true, "__pycache__": true,
 	"node_modules": true, ".vscode": true, ".idea": true, "cmd": true,
-	"bin": true, "installers": true, "releases_v5.5.1": true, "releases_v5.5.2": true, "releases_v5.5.21": true, "android": true,
+	"bin": true, "installers": true, "releases_v5.5.1": true, "releases_v5.5.2": true, "releases_v5.5.21": true, "releases_v5.5.3": true, "android": true,
 }
 
 func pbkdf2SHA256(password []byte, salt []byte, iter int, keyLen int) []byte {
@@ -342,13 +343,16 @@ func checkFileStatus(filepath string) string {
 	}
 	if info.Version == 5 {
 		if info.Length == FooterLenV5Resumable {
-			if info.StateFlags == StateUnlockInProgress {
+			if info.StateFlags&3 == StateUnlockInProgress {
 				return fmt.Sprintf("locked (V5 RESUMABLE UNLOCK INTERRUPTED at %.2f MB)", float64(info.Checkpoint)/(1024*1024))
-			} else if info.StateFlags == StateLockInProgress {
+			} else if info.StateFlags&3 == StateLockInProgress {
 				return fmt.Sprintf("locked (V5 RESUMABLE LOCK INTERRUPTED at %.2f MB)", float64(info.Checkpoint)/(1024*1024))
 			}
 		}
 		lbl := "V5 Authenticated AEAD (100% Full-File)"
+		if info.StateFlags&FlagGibberishName != 0 {
+			lbl += " [Gibberish Name]"
+		}
 		if info.FailedAttempts >= 5 {
 			return fmt.Sprintf("locked (%s - LOCKOUT: %d fails)", lbl, info.FailedAttempts)
 		}
@@ -368,26 +372,25 @@ func checkFileStatus(filepath string) string {
 	return fmt.Sprintf("locked (Legacy V%d)", info.Version)
 }
 
-func lockFileV5(filePath string, password string) (bool, string) {
+func lockFileV5(filePath string, password string, gibberish bool) (bool, string, string) {
 	fi, err := os.Lstat(filePath)
 	if err != nil {
-		return false, err.Error()
+		return false, err.Error(), filePath
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
-		return false, "Symlink skipped"
+		return false, "Symlink skipped", filePath
 	}
 	size := fi.Size()
 	if size < 1 {
-		return false, "File is empty (0 bytes)"
+		return false, "File is empty (0 bytes)", filePath
 	}
 
 	fname := filepath.Base(filePath)
 
 	f, err := os.OpenFile(filePath, os.O_RDWR, 0666)
 	if err != nil {
-		return false, err.Error()
+		return false, err.Error(), filePath
 	}
-	defer f.Close()
 
 	info, _ := readFileFooter(f, size)
 
@@ -400,12 +403,13 @@ func lockFileV5(filePath string, password string) (bool, string) {
 	}
 
 	// Resume interrupted lock
-	if info != nil && info.Version == 5 && info.Length == FooterLenV5Resumable && info.StateFlags == StateLockInProgress {
+	if info != nil && info.Version == 5 && info.Length == FooterLenV5Resumable && info.StateFlags&3 == StateLockInProgress {
 		salt := info.Footer[12:28]
 		nonce := info.Footer[28:44]
 		encKey, macKey, authTag := deriveKeysV5(password, salt)
 		if subtle.ConstantTimeCompare(info.Footer[76:92], authTag) != 1 {
-			return false, "INCORRECT PASSWORD during resume"
+			f.Close()
+			return false, "INCORRECT PASSWORD during resume", filePath
 		}
 
 		block, _ := aes.NewCipher(encKey)
@@ -473,13 +477,15 @@ func lockFileV5(filePath string, password string) (bool, string) {
 		binary.LittleEndian.PutUint16(finalTail[10:12], StateNormalLocked)
 		f.Write(finalTail[:])
 		f.Sync()
+		f.Close()
 
 		clearProgressLine()
-		return true, fmt.Sprintf("Resumed & Finalized 100%% Full-File AEAD (%d bytes)", dataLen)
+		return true, fmt.Sprintf("Resumed & Finalized 100%% Full-File AEAD (%d bytes)", dataLen), filePath
 	}
 
 	if info != nil {
-		return false, "Already locked"
+		f.Close()
+		return false, "Already locked", filePath
 	}
 
 	salt := make([]byte, 16)
@@ -491,8 +497,28 @@ func lockFileV5(filePath string, password string) (bool, string) {
 	encKey, macKey, authTag := deriveKeysV5(password, salt)
 	dataLen := size
 
+	metaLen := int64(0)
+	var metaBytes []byte
+	block, _ := aes.NewCipher(encKey)
+
+	if gibberish {
+		nameBytes := []byte(fname)
+		nameLen := uint16(len(nameBytes))
+		metaBytes = make([]byte, 2+len(nameBytes))
+		binary.LittleEndian.PutUint16(metaBytes[0:2], nameLen)
+
+		startBlockIdx := uint64((dataLen + 15) / 16)
+		nameCtr := makeCounter(nonce, startBlockIdx)
+		nameStream := cipher.NewCTR(block, nameCtr)
+		nameStream.XORKeyStream(metaBytes[2:], nameBytes)
+		metaLen = int64(len(metaBytes))
+
+		f.Seek(dataLen, io.SeekStart)
+		f.Write(metaBytes)
+	}
+
 	// Write initial 104-byte header at EOF with StateLockInProgress
-	f.Seek(0, io.SeekEnd)
+	f.Seek(dataLen+metaLen, io.SeekStart)
 	var initialFooter [FooterLenV5Resumable]byte
 	copy(initialFooter[0:8], []byte(MagicV5))
 	binary.LittleEndian.PutUint32(initialFooter[8:12], ChunkSizeV5)
@@ -506,7 +532,6 @@ func lockFileV5(filePath string, password string) (bool, string) {
 	f.Write(initialFooter[:])
 	f.Sync()
 
-	block, _ := aes.NewCipher(encKey)
 	h := hmac.New(sha256.New, macKey)
 	pos := int64(0)
 	blockIdx := int64(0)
@@ -536,7 +561,7 @@ func lockFileV5(filePath string, password string) (bool, string) {
 
 		if pos-lastSyncPos >= 1024*1024 || pos == dataLen {
 			f.Sync()
-			f.Seek(dataLen+92, io.SeekStart)
+			f.Seek(dataLen+metaLen+92, io.SeekStart)
 			var chkBuf [8]byte
 			binary.LittleEndian.PutUint64(chkBuf[:], uint64(pos))
 			f.Write(chkBuf[:])
@@ -546,44 +571,71 @@ func lockFileV5(filePath string, password string) (bool, string) {
 		renderProgress("Encrypting", fname, pos, dataLen, encT)
 	}
 
+	if gibberish {
+		h.Write(metaBytes)
+	}
+
 	masterMac := h.Sum(nil)
-	f.Seek(dataLen+44, io.SeekStart)
+	f.Seek(dataLen+metaLen+44, io.SeekStart)
 	f.Write(masterMac)
-	f.Seek(dataLen+92, io.SeekStart)
+	f.Seek(dataLen+metaLen+92, io.SeekStart)
 	var finalTail [12]byte
 	binary.LittleEndian.PutUint64(finalTail[0:8], uint64(dataLen))
 	binary.LittleEndian.PutUint16(finalTail[8:10], 0)
-	binary.LittleEndian.PutUint16(finalTail[10:12], StateNormalLocked)
+	finalFlags := uint16(StateNormalLocked)
+	if gibberish {
+		finalFlags |= FlagGibberishName
+	}
+	binary.LittleEndian.PutUint16(finalTail[10:12], finalFlags)
 	f.Write(finalTail[:])
 	f.Sync()
+	f.Close()
 
 	clearProgressLine()
-	return true, fmt.Sprintf("100%% Full-File AEAD Resumable Armor (%d bytes, 600k PBKDF2)", dataLen)
+
+	if gibberish {
+		var randBytes [8]byte
+		rand.Read(randBytes[:])
+		gibName := fmt.Sprintf("%x.vault", randBytes)
+		dir := filepath.Dir(filePath)
+		newPath := filepath.Join(dir, gibName)
+		if err := os.Rename(filePath, newPath); err != nil {
+			return true, fmt.Sprintf("100%% Full-File AEAD (Rename failed: %v)", err), filePath
+		}
+		return true, fmt.Sprintf("100%% Full-File AEAD Armor (Gibberish: %s)", gibName), newPath
+	}
+
+	return true, fmt.Sprintf("100%% Full-File AEAD Resumable Armor (%d bytes, 600k PBKDF2)", dataLen), filePath
 }
 
-func unlockFileV5(filePath string, password string) (bool, string) {
+func unlockFileV5(filePath string, password string) (bool, string, string) {
 	fi, err := os.Lstat(filePath)
 	if err != nil {
-		return false, err.Error()
+		return false, err.Error(), filePath
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
-		return false, "Symlink skipped"
+		return false, "Symlink skipped", filePath
 	}
 	size := fi.Size()
 	fname := filepath.Base(filePath)
 
 	f, err := os.OpenFile(filePath, os.O_RDWR, 0666)
 	if err != nil {
-		return false, err.Error()
+		return false, err.Error(), filePath
 	}
-	defer f.Close()
 
 	info, _ := readFileFooter(f, size)
 	if info == nil || info.Version == -1 {
-		return false, "Not locked"
+		f.Close()
+		return false, "Not locked", filePath
 	}
 
-	dataLen := size - info.Length
+	hasGibberish := (info.StateFlags & FlagGibberishName) != 0
+	totalCipherLen := size - info.Length
+	dataLen := totalCipherLen
+	if hasGibberish {
+		dataLen = int64(info.Checkpoint)
+	}
 
 	if info.Version == 5 {
 		salt := info.Footer[12:28]
@@ -592,7 +644,8 @@ func unlockFileV5(filePath string, password string) (bool, string) {
 		storedAuthTag := info.Footer[76:92]
 
 		if info.FailedAttempts >= 10 {
-			return false, fmt.Sprintf("BRUTE-FORCE LOCKOUT ACTIVE (%d failed attempts). Cooldown required.", info.FailedAttempts)
+			f.Close()
+			return false, fmt.Sprintf("BRUTE-FORCE LOCKOUT ACTIVE (%d failed attempts). Cooldown required.", info.FailedAttempts), filePath
 		}
 
 		renderPhaseNotice("Key Deriv", fname, "Computing 600,000 PBKDF2 rounds...")
@@ -605,18 +658,19 @@ func unlockFileV5(filePath string, password string) (bool, string) {
 			binary.LittleEndian.PutUint16(failBuf[:], info.FailedAttempts)
 			f.Write(failBuf[:])
 			f.Sync()
+			f.Close()
 			rem := 10 - int(info.FailedAttempts)
 			if rem < 0 {
 				rem = 0
 			}
-			return false, fmt.Sprintf("INCORRECT PASSWORD (%d failed attempts, %d left before lockout)", info.FailedAttempts, rem)
+			return false, fmt.Sprintf("INCORRECT PASSWORD (%d failed attempts, %d left before lockout)", info.FailedAttempts, rem), filePath
 		}
 
 		block, _ := aes.NewCipher(encKey)
 		buf := make([]byte, ChunkSizeV5)
 
 		// CASE 1: Rollback an interrupted lock operation
-		if info.StateFlags == StateLockInProgress && info.Checkpoint > 0 {
+		if info.StateFlags&3 == StateLockInProgress && info.Checkpoint > 0 {
 			rollbackLen := int64(info.Checkpoint)
 			if rollbackLen > dataLen {
 				rollbackLen = dataLen
@@ -647,13 +701,14 @@ func unlockFileV5(filePath string, password string) (bool, string) {
 			f.Sync()
 			f.Truncate(dataLen)
 			f.Sync()
+			f.Close()
 			clearProgressLine()
-			return true, fmt.Sprintf("Rolled Back Interrupted Lock & Fully Restored Original (%d bytes)", dataLen)
+			return true, fmt.Sprintf("Rolled Back Interrupted Lock & Fully Restored Original (%d bytes)", dataLen), filePath
 		}
 
 		// CASE 2: Resume interrupted unlock or fresh unlock
 		startPos := int64(0)
-		if info.StateFlags == StateUnlockInProgress && info.Checkpoint > 0 {
+		if info.StateFlags&3 == StateUnlockInProgress && info.Checkpoint > 0 {
 			startPos = int64(info.Checkpoint)
 		} else {
 			// Verify Master HMAC
@@ -661,30 +716,53 @@ func unlockFileV5(filePath string, password string) (bool, string) {
 			h := hmac.New(sha256.New, macKey)
 			p := int64(0)
 			verifyT := time.Now()
-			for p < dataLen {
+			for p < totalCipherLen {
 				t := int64(ChunkSizeV5)
-				if dataLen-p < t {
-					t = dataLen - p
+				if totalCipherLen-p < t {
+					t = totalCipherLen - p
 				}
 				io.ReadFull(f, buf[:t])
 				h.Write(buf[:t])
 				p += t
-				renderProgress("Verifying", fname, p, dataLen, verifyT)
+				renderProgress("Verifying", fname, p, totalCipherLen, verifyT)
 			}
 			computedMac := h.Sum(nil)
 			if subtle.ConstantTimeCompare(storedMac, computedMac) != 1 {
 				clearProgressLine()
-				return false, "INTEGRITY ERROR: Ciphertext has been modified or corrupted! Decryption halted."
+				f.Close()
+				return false, "INTEGRITY ERROR: Ciphertext has been modified or corrupted! Decryption halted.", filePath
 			}
 
 			if info.Length == FooterLenV5Resumable {
-				f.Seek(dataLen+92, io.SeekStart)
+				f.Seek(totalCipherLen+92, io.SeekStart)
 				var stateBuf [12]byte
 				binary.LittleEndian.PutUint64(stateBuf[0:8], 0)
 				binary.LittleEndian.PutUint16(stateBuf[8:10], info.FailedAttempts)
-				binary.LittleEndian.PutUint16(stateBuf[10:12], StateUnlockInProgress)
+				stateFlags := uint16(StateUnlockInProgress)
+				if hasGibberish {
+					stateFlags |= FlagGibberishName
+				}
+				binary.LittleEndian.PutUint16(stateBuf[10:12], stateFlags)
 				f.Write(stateBuf[:])
 				f.Sync()
+			}
+		}
+
+		var restoredOrigName string
+		if hasGibberish {
+			f.Seek(dataLen, io.SeekStart)
+			var lenBuf [2]byte
+			io.ReadFull(f, lenBuf[:])
+			nameLen := binary.LittleEndian.Uint16(lenBuf[:])
+			if nameLen > 0 && nameLen < 2048 {
+				encName := make([]byte, nameLen)
+				io.ReadFull(f, encName)
+				startBlockIdx := uint64((dataLen + 15) / 16)
+				nameCtr := makeCounter(nonce, startBlockIdx)
+				nameStream := cipher.NewCTR(block, nameCtr)
+				decName := make([]byte, nameLen)
+				nameStream.XORKeyStream(decName, encName)
+				restoredOrigName = string(decName)
 			}
 		}
 
@@ -714,7 +792,7 @@ func unlockFileV5(filePath string, password string) (bool, string) {
 			if info.Length == FooterLenV5Resumable {
 				if pos-lastSyncPos >= 1024*1024 || pos == dataLen {
 					f.Sync()
-					f.Seek(dataLen+92, io.SeekStart)
+					f.Seek(totalCipherLen+92, io.SeekStart)
 					var chkBuf [8]byte
 					binary.LittleEndian.PutUint64(chkBuf[:], uint64(pos))
 					f.Write(chkBuf[:])
@@ -728,16 +806,31 @@ func unlockFileV5(filePath string, password string) (bool, string) {
 		f.Sync()
 		f.Truncate(dataLen)
 		f.Sync()
+		f.Close()
 
 		clearProgressLine()
 
-		if startPos > 0 {
-			return true, fmt.Sprintf("Resumed & Fully Restored (%d bytes, resumed from %.2f MB)", dataLen, float64(startPos)/(1024*1024))
+		if hasGibberish && restoredOrigName != "" {
+			dir := filepath.Dir(filePath)
+			restoredPath := filepath.Join(dir, restoredOrigName)
+			if _, err := os.Stat(restoredPath); err == nil && restoredPath != filePath {
+				ext := filepath.Ext(restoredOrigName)
+				base := strings.TrimSuffix(restoredOrigName, ext)
+				restoredPath = filepath.Join(dir, fmt.Sprintf("%s_restored%s", base, ext))
+			}
+			if err := os.Rename(filePath, restoredPath); err == nil {
+				return true, fmt.Sprintf("Verified & Restored original file %s (%d bytes)", filepath.Base(restoredPath), dataLen), restoredPath
+			}
 		}
-		return true, fmt.Sprintf("Verified & Restored 100%% full file (%d bytes)", dataLen)
+
+		if startPos > 0 {
+			return true, fmt.Sprintf("Resumed & Fully Restored (%d bytes, resumed from %.2f MB)", dataLen, float64(startPos)/(1024*1024)), filePath
+		}
+		return true, fmt.Sprintf("Verified & Restored 100%% full file (%d bytes)", dataLen), filePath
 	}
 
-	return false, "Legacy format detected. Please unlock with python tools/vault.py unlock."
+	f.Close()
+	return false, "Legacy format detected. Please unlock with python tools/vault.py unlock.", filePath
 }
 
 func resolveTargets(targetPath string) []string {
@@ -821,13 +914,18 @@ func readPasswordMasked(prompt string) string {
 	return strings.TrimRight(pass, "\r\n")
 }
 
-func printBanner(action, targetPath string, targetsCount int) {
+func printBanner(action, targetPath string, targetsCount int, gibberish bool) {
 	fmt.Println(strings.Repeat("=", 70))
 	fmt.Printf("  Universal Vault v%s (CLI Native): %s Operation\n", Version, strings.ToUpper(action))
 	fmt.Printf("  Target Scope   : %s\n", targetPath)
 	fmt.Printf("  Files Located  : %d\n", targetsCount)
 	if action == "lock" {
 		fmt.Println("  Armor Mode     : 100% Full-File Resumable AEAD (Stream Encrypt-then-MAC)")
+		if gibberish {
+			fmt.Println("  File Names     : Format to Gibberish (16-Hex Hash .vault)")
+		} else {
+			fmt.Println("  File Names     : Standard In-Place")
+		}
 		fmt.Println("  Security       : 600,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256")
 		fmt.Println("  Fault Tolerance: Checkpointed In-Place Streaming (Crash-Safe Resumable)")
 	}
@@ -838,10 +936,10 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Printf("Universal Vault v%s - High Performance In-Place Cryptographic CLI\n\n", Version)
 		fmt.Println("Usage:")
-		fmt.Println("  vault lock   <path> [-p password]   Encrypt file or directory tree in-place")
-		fmt.Println("  vault unlock <path> [-p password]   Verify HMAC & decrypt file or directory")
-		fmt.Println("  vault status <path>                 Inspect lock status and checkpoints")
-		fmt.Println("  vault version                       Display CLI build version")
+		fmt.Println("  vault lock   <path> [-p password] [-g|--gibberish]   Encrypt file or directory tree in-place")
+		fmt.Println("  vault unlock <path> [-p password]                   Verify HMAC & decrypt file or directory")
+		fmt.Println("  vault status <path>                                 Inspect lock status and checkpoints")
+		fmt.Println("  vault version                                       Display CLI build version")
 		return
 	}
 
@@ -859,6 +957,7 @@ func main() {
 
 	targetPath := "."
 	var password string
+	gibberish := false
 
 	for i := 2; i < len(os.Args); i++ {
 		arg := os.Args[i]
@@ -867,6 +966,8 @@ func main() {
 				password = os.Args[i+1]
 				i++
 			}
+		} else if arg == "-g" || arg == "--gibberish" {
+			gibberish = true
 		} else if !strings.HasPrefix(arg, "-") {
 			targetPath = arg
 		}
@@ -874,7 +975,7 @@ func main() {
 
 	targets := resolveTargets(targetPath)
 	absPath, _ := filepath.Abs(targetPath)
-	printBanner(action, absPath, len(targets))
+	printBanner(action, absPath, len(targets), gibberish)
 
 	if len(targets) == 0 {
 		fmt.Println("No eligible files found to process.\n")
@@ -922,23 +1023,29 @@ func main() {
 		}
 		var ok bool
 		var msg string
+		var newP string
 		if action == "lock" {
-			ok, msg = lockFileV5(p, password)
+			ok, msg, newP = lockFileV5(p, password, gibberish)
 		} else {
-			ok, msg = unlockFileV5(p, password)
+			ok, msg, newP = unlockFileV5(p, password)
 		}
 
 		clearProgressLine()
-		fmt.Printf("Processing: %s... ", rel)
-
-		if ok {
-			fmt.Printf("[SUCCESS: %s]\n", msg)
+		if ok && newP != "" && newP != p {
+			newRel, err := filepath.Rel(absPath, newP)
+			if err != nil || newRel == "." {
+				newRel = filepath.Base(newP)
+			}
+			fmt.Printf("Processing: %s -> %s... [SUCCESS: %s]\n", rel, newRel, msg)
+			succeeded++
+		} else if ok {
+			fmt.Printf("Processing: %s... [SUCCESS: %s]\n", rel, msg)
 			succeeded++
 		} else if strings.Contains(msg, "Already locked") || strings.Contains(msg, "Not locked") || strings.Contains(msg, "empty") {
-			fmt.Printf("[SKIPPED: %s]\n", msg)
+			fmt.Printf("Processing: %s... [SKIPPED: %s]\n", rel, msg)
 			skipped++
 		} else {
-			fmt.Printf("[FAILED: %s]\n", msg)
+			fmt.Printf("Processing: %s... [FAILED: %s]\n", rel, msg)
 			failed++
 		}
 	}

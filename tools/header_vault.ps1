@@ -11,7 +11,10 @@ param(
     [string]$Path = ".",
 
     [Parameter(Position=2)]
-    [string]$Password
+    [string]$Password,
+
+    [Parameter(Position=3)]
+    [switch]$Gibberish
 )
 
 $MAGIC_V5 = [System.Text.Encoding]::ASCII.GetBytes("VAULTV05")
@@ -32,6 +35,7 @@ $KDF_ITERS_V5 = 600000  # OWASP 2026 Gold Standard (600,000 rounds)
 $STATE_NORMAL_LOCKED = 0
 $STATE_LOCK_IN_PROGRESS = 1
 $STATE_UNLOCK_IN_PROGRESS = 2
+$FLAG_GIBBERISH_NAME = 4
 
 # Compile high-performance C# AES-CTR processor for 100x speedup
 if (-not ([System.Management.Automation.PSTypeName]'VaultFastCtr').Type) {
@@ -231,16 +235,18 @@ function Check-FileLockStatus($filePath) {
                         $checkpoint = [BitConverter]::ToUInt64($finfo.Footer, 92)
                         $fails = [BitConverter]::ToUInt16($finfo.Footer, 100)
                         $state = [BitConverter]::ToUInt16($finfo.Footer, 102)
-                        if ($state -eq $STATE_UNLOCK_IN_PROGRESS) {
+                        if (($state -band 3) -eq $STATE_UNLOCK_IN_PROGRESS) {
                             return "locked (V5 RESUMABLE UNLOCK INTERRUPTED at $([Math]::Round($checkpoint/1MB, 2)) MB)"
-                        } elseif ($state -eq $STATE_LOCK_IN_PROGRESS) {
+                        } elseif (($state -band 3) -eq $STATE_LOCK_IN_PROGRESS) {
                             return "locked (V5 RESUMABLE LOCK INTERRUPTED at $([Math]::Round($checkpoint/1MB, 2)) MB)"
                         }
                     } else {
                         $fails = [BitConverter]::ToUInt16($finfo.Footer, 92)
+                        $state = [BitConverter]::ToUInt16($finfo.Footer, 94)
                     }
 
                     $lbl = "V5 Authenticated AEAD (100% Full-File)"
+                    if (($state -band $FLAG_GIBBERISH_NAME) -ne 0) { $lbl += " [Gibberish Name]" }
                     if ($fails -ge 5) { return "locked ($lbl - LOCKOUT: $fails fails)" }
                     return "locked ($lbl)"
                 }
@@ -255,11 +261,11 @@ function Check-FileLockStatus($filePath) {
     }
 }
 
-function Lock-FileV5($filePath, $pass) {
+function Lock-FileV5($filePath, $pass, [switch]$Gibberish) {
     try {
         $fs = [System.IO.File]::Open($filePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
     } catch {
-        return @{ Status = "Error"; Message = "Cannot open file: $($_.Exception.Message)" }
+        return @{ Status = "Error"; Message = "Cannot open file: $($_.Exception.Message)"; NewPath = $filePath }
     }
 
     $fname = [System.IO.Path]::GetFileName($filePath)
@@ -267,7 +273,7 @@ function Lock-FileV5($filePath, $pass) {
 
     try {
         if ($fs.Length -lt 1) {
-            return @{ Status = "Skipped"; Message = "File is empty (0 bytes)" }
+            return @{ Status = "Skipped"; Message = "File is empty (0 bytes)"; NewPath = $filePath }
         }
 
         $finfo = Read-FileFooter $fs
@@ -275,7 +281,7 @@ function Lock-FileV5($filePath, $pass) {
             if ($finfo.Version -eq 5 -and $finfo.Length -eq $FOOTER_LEN_V5_RESUMABLE) {
                 $checkpoint = [BitConverter]::ToUInt64($finfo.Footer, 92)
                 $state = [BitConverter]::ToUInt16($finfo.Footer, 102)
-                if ($state -eq $STATE_LOCK_IN_PROGRESS) {
+                if (($state -band 3) -eq $STATE_LOCK_IN_PROGRESS) {
                     # Resume interrupted lock forward
                     $salt = New-Object byte[] 16
                     [Array]::Copy($finfo.Footer, 12, $salt, 0, 16)
@@ -347,10 +353,10 @@ function Lock-FileV5($filePath, $pass) {
                     Sync-FileToDisk $fs
 
                     if ($fs.Length -ge (5 * 1024 * 1024)) { Write-Host "" }
-                    return @{ Status = "Success"; Message = "Resumed & Finalized 100% Full-File AEAD ($dataLen bytes)" }
+                    return @{ Status = "Success"; Message = "Resumed & Finalized 100% Full-File AEAD ($dataLen bytes)"; NewPath = $filePath }
                 }
             }
-            return @{ Status = "Skipped"; Message = "Already locked" }
+            return @{ Status = "Skipped"; Message = "Already locked"; NewPath = $filePath }
         }
 
         $dataLen = $fs.Length
@@ -368,8 +374,27 @@ function Lock-FileV5($filePath, $pass) {
         $aesEcb.Key = $crypto.EncKey
         $encryptor = $aesEcb.CreateEncryptor()
 
+        $metaLen = 0L
+        $metaBytes = $null
+        if ($Gibberish) {
+            $nameBytes = [System.Text.Encoding]::UTF8.GetBytes($fname)
+            $nameLen = [uint16]$nameBytes.Length
+            $metaLen = [long](2 + $nameBytes.Length)
+            $metaBytes = New-Object byte[] $metaLen
+            [BitConverter]::GetBytes($nameLen).CopyTo($metaBytes, 0)
+
+            $nameCipher = New-Object byte[] $nameBytes.Length
+            [Array]::Copy($nameBytes, 0, $nameCipher, 0, $nameBytes.Length)
+            $startBlockIdx = [long]([Math]::Ceiling($dataLen / 16.0))
+            [VaultFastCtr]::ProcessChunk($encryptor, $nonce, $nameCipher, 0, $nameCipher.Length, $startBlockIdx)
+            [Array]::Copy($nameCipher, 0, $metaBytes, 2, $nameCipher.Length)
+
+            $fs.Seek($dataLen, [System.IO.SeekOrigin]::Begin) | Out-Null
+            $fs.Write($metaBytes, 0, $metaBytes.Length)
+        }
+
         # Write initial 104-byte header at EOF with STATE_LOCK_IN_PROGRESS atomically and fsync
-        $fs.Seek(0, [System.IO.SeekOrigin]::End) | Out-Null
+        $fs.Seek($dataLen + $metaLen, [System.IO.SeekOrigin]::Begin) | Out-Null
         $chunkSizeNum = [BitConverter]::GetBytes([uint32]$CHUNK_SIZE_V5)
         $chk0 = [BitConverter]::GetBytes([uint64]0)
         $failBytes = [BitConverter]::GetBytes([uint16]0)
@@ -400,7 +425,7 @@ function Lock-FileV5($filePath, $pass) {
 
             [VaultFastCtr]::ProcessChunk($encryptor, $nonce, $buffer, 0, $take, ($blockIdx * 4096))
 
-            if ($pos + $take -eq $dataLen) {
+            if (-not $Gibberish -and ($pos + $take -eq $dataLen)) {
                 $hmac.TransformFinalBlock($buffer, 0, $take) | Out-Null
             } else {
                 $hmac.TransformBlock($buffer, 0, $take, $buffer, 0) | Out-Null
@@ -415,7 +440,7 @@ function Lock-FileV5($filePath, $pass) {
             # Physical Flash Write Barrier: Sync data to disk before advancing checkpoint
             if (($pos - $lastSyncPos -ge (1024 * 1024)) -or ($pos -eq $dataLen)) {
                 Sync-FileToDisk $fs
-                $fs.Seek($dataLen + 92, [System.IO.SeekOrigin]::Begin) | Out-Null
+                $fs.Seek($dataLen + $metaLen + 92, [System.IO.SeekOrigin]::Begin) | Out-Null
                 $chkBytes = [BitConverter]::GetBytes([uint64]$pos)
                 $fs.Write($chkBytes, 0, 8)
                 Sync-FileToDisk $fs
@@ -425,22 +450,44 @@ function Lock-FileV5($filePath, $pass) {
             Render-Progress $fname $pos $dataLen $sw
         }
 
+        if ($Gibberish) {
+            $hmac.TransformFinalBlock($metaBytes, 0, $metaBytes.Length) | Out-Null
+        }
+
         $masterMac = $hmac.Hash
 
-        $fs.Seek($dataLen + 44, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $fs.Seek($dataLen + $metaLen + 44, [System.IO.SeekOrigin]::Begin) | Out-Null
         $fs.Write($masterMac, 0, 32)
-        $fs.Seek($dataLen + 92, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $fs.Seek($dataLen + $metaLen + 92, [System.IO.SeekOrigin]::Begin) | Out-Null
         $chkDone = [BitConverter]::GetBytes([uint64]$dataLen)
-        $mode0 = [BitConverter]::GetBytes([uint16]$STATE_NORMAL_LOCKED)
+        $gibFlag = if ($Gibberish) { $FLAG_GIBBERISH_NAME } else { 0 }
+        $finalModeVal = [uint16]($STATE_NORMAL_LOCKED -bor $gibFlag)
+        $mode0 = [BitConverter]::GetBytes($finalModeVal)
         $fs.Write($chkDone, 0, 8)
         $fs.Write($failBytes, 0, 2)
         $fs.Write($mode0, 0, 2)
         Sync-FileToDisk $fs
+        $fs.Close()
 
         if ($dataLen -ge (5 * 1024 * 1024)) { Write-Host "" }
-        return @{ Status = "Success"; Message = "100% Full-File Resumable AEAD ($dataLen bytes, 600k PBKDF2)" }
+
+        if ($Gibberish) {
+            $randBytes = New-Object byte[] 8
+            $rng.GetBytes($randBytes)
+            $hexStr = ([BitConverter]::ToString($randBytes) -replace "-", "").ToLower()
+            $gibberishName = "$hexStr.vault"
+            $newPath = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($filePath), $gibberishName)
+            try {
+                [System.IO.File]::Move($filePath, $newPath)
+                return @{ Status = "Success"; Message = "100% Full-File Resumable AEAD (Gibberish: $gibberishName)"; NewPath = $newPath }
+            } catch {
+                return @{ Status = "Success"; Message = "100% Full-File Resumable AEAD (Rename failed: $($_.Exception.Message))"; NewPath = $filePath }
+            }
+        }
+
+        return @{ Status = "Success"; Message = "100% Full-File Resumable AEAD ($dataLen bytes, 600k PBKDF2)"; NewPath = $filePath }
     } finally {
-        $fs.Close()
+        if ($fs) { $fs.Close() }
     }
 }
 
@@ -448,7 +495,7 @@ function Unlock-FileV5($filePath, $pass) {
     try {
         $fs = [System.IO.File]::Open($filePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
     } catch {
-        return @{ Status = "Error"; Message = "Cannot open file: $($_.Exception.Message)" }
+        return @{ Status = "Error"; Message = "Cannot open file: $($_.Exception.Message)"; NewPath = $filePath }
     }
 
     $fname = [System.IO.Path]::GetFileName($filePath)
@@ -457,11 +504,27 @@ function Unlock-FileV5($filePath, $pass) {
     try {
         $finfo = Read-FileFooter $fs
         if (-not $finfo) {
-            return @{ Status = "Skipped"; Message = "Not locked" }
+            return @{ Status = "Skipped"; Message = "Not locked"; NewPath = $filePath }
         }
 
         $footer = $finfo.Footer
-        $dataLen = $fs.Length - $finfo.Length
+
+        $checkpoint = [uint64]0
+        $fails = 0
+        $state = $STATE_NORMAL_LOCKED
+
+        if ($finfo.Length -eq $FOOTER_LEN_V5_RESUMABLE) {
+            $checkpoint = [BitConverter]::ToUInt64($footer, 92)
+            $fails = [BitConverter]::ToUInt16($footer, 100)
+            $state = [BitConverter]::ToUInt16($footer, 102)
+        } else {
+            $fails = [BitConverter]::ToUInt16($footer, 92)
+            $state = [BitConverter]::ToUInt16($footer, 94)
+        }
+
+        $hasGibberish = ($state -band $FLAG_GIBBERISH_NAME) -ne 0
+        $totalCipherLen = $fs.Length - $finfo.Length
+        $dataLen = if ($hasGibberish) { [long]$checkpoint } else { $totalCipherLen }
 
         if ($finfo.Version -eq 5) {
             $salt = New-Object byte[] 16
@@ -473,20 +536,8 @@ function Unlock-FileV5($filePath, $pass) {
             $storedAuthTag = New-Object byte[] 16
             [Array]::Copy($footer, 76, $storedAuthTag, 0, 16)
 
-            $checkpoint = 0UL
-            $fails = 0
-            $state = $STATE_NORMAL_LOCKED
-
-            if ($finfo.Length -eq $FOOTER_LEN_V5_RESUMABLE) {
-                $checkpoint = [BitConverter]::ToUInt64($footer, 92)
-                $fails = [BitConverter]::ToUInt16($footer, 100)
-                $state = [BitConverter]::ToUInt16($footer, 102)
-            } else {
-                $fails = [BitConverter]::ToUInt16($footer, 92)
-            }
-
             if ($fails -ge 10) {
-                return @{ Status = "AuthFailed"; Message = "BRUTE-FORCE LOCKOUT ($fails failed attempts). Cooldown required." }
+                return @{ Status = "AuthFailed"; Message = "BRUTE-FORCE LOCKOUT ($fails failed attempts). Cooldown required."; NewPath = $filePath }
             }
 
             $crypto = Get-KeysV5 $pass $salt
@@ -505,7 +556,7 @@ function Unlock-FileV5($filePath, $pass) {
                 $fs.Write($failBytes, 0, 2)
                 Sync-FileToDisk $fs
                 $rem = [Math]::Max(0, 10 - $fails)
-                return @{ Status = "AuthFailed"; Message = "INCORRECT PASSWORD ($fails failed attempts, $rem remaining before lockout)" }
+                return @{ Status = "AuthFailed"; Message = "INCORRECT PASSWORD ($fails failed attempts, $rem remaining before lockout)"; NewPath = $filePath }
             }
 
             $aesEcb = [System.Security.Cryptography.Aes]::Create()
@@ -515,7 +566,7 @@ function Unlock-FileV5($filePath, $pass) {
             $encryptor = $aesEcb.CreateEncryptor()
 
             # CASE 1: Rollback an interrupted LOCK operation (User wants to decrypt partially locked file)
-            if ($state -eq $STATE_LOCK_IN_PROGRESS -and $checkpoint -gt 0) {
+            if (($state -band 3) -eq $STATE_LOCK_IN_PROGRESS -and $checkpoint -gt 0) {
                 $rollbackLen = [long][Math]::Min($checkpoint, [uint64]$dataLen)
                 $pos = 0L
                 $blockIdx = 0L
@@ -538,24 +589,25 @@ function Unlock-FileV5($filePath, $pass) {
                 Sync-FileToDisk $fs
                 $fs.SetLength($dataLen)
                 Sync-FileToDisk $fs
+                $fs.Close()
                 if ($dataLen -ge (5 * 1024 * 1024)) { Write-Host "" }
-                return @{ Status = "Success"; Message = "Rolled Back Interrupted Lock & Fully Restored Original ($dataLen bytes)" }
+                return @{ Status = "Success"; Message = "Rolled Back Interrupted Lock & Fully Restored Original ($dataLen bytes)"; NewPath = $filePath }
             }
 
             # CASE 2: Resume an interrupted UNLOCK operation
             $startPos = 0L
-            if ($state -eq $STATE_UNLOCK_IN_PROGRESS -and $checkpoint -gt 0) {
+            if (($state -band 3) -eq $STATE_UNLOCK_IN_PROGRESS -and $checkpoint -gt 0) {
                 $startPos = [long]$checkpoint
             } else {
                 # Authenticate Ciphertext (Anti-Tampering Integrity Check)
                 $hmac = [System.Security.Cryptography.HMACSHA256]::new($crypto.MacKey)
                 $p = 0L
-                while ($p -lt $dataLen) {
-                    $t = [int][Math]::Min([long]$CHUNK_SIZE_V5, ($dataLen - $p))
+                while ($p -lt $totalCipherLen) {
+                    $t = [int][Math]::Min([long]$CHUNK_SIZE_V5, ($totalCipherLen - $p))
                     $fs.Seek($p, [System.IO.SeekOrigin]::Begin) | Out-Null
                     $b = New-Object byte[] $t
                     $fs.Read($b, 0, $t) | Out-Null
-                    if ($p + $t -eq $dataLen) { $hmac.TransformFinalBlock($b, 0, $t) | Out-Null }
+                    if ($p + $t -eq $totalCipherLen) { $hmac.TransformFinalBlock($b, 0, $t) | Out-Null }
                     else { $hmac.TransformBlock($b, 0, $t, $b, 0) | Out-Null }
                     $p += $t
                 }
@@ -567,18 +619,41 @@ function Unlock-FileV5($filePath, $pass) {
                 }
 
                 if (-not $macMatch) {
-                    return @{ Status = "Error"; Message = "INTEGRITY ERROR: Ciphertext has been modified or corrupted! Decryption halted." }
+                    return @{ Status = "Error"; Message = "INTEGRITY ERROR: Ciphertext has been modified or corrupted! Decryption halted."; NewPath = $filePath }
                 }
 
                 if ($finfo.Length -eq $FOOTER_LEN_V5_RESUMABLE) {
-                    $fs.Seek($dataLen + 92, [System.IO.SeekOrigin]::Begin) | Out-Null
+                    $fs.Seek($totalCipherLen + 92, [System.IO.SeekOrigin]::Begin) | Out-Null
                     $chk0 = [BitConverter]::GetBytes([uint64]0)
                     $failBytes = [BitConverter]::GetBytes([uint16]$fails)
-                    $modeUnlock = [BitConverter]::GetBytes([uint16]$STATE_UNLOCK_IN_PROGRESS)
+                    $gibFlag = if ($hasGibberish) { $FLAG_GIBBERISH_NAME } else { 0 }
+                    $modeUnlockVal = [uint16]($STATE_UNLOCK_IN_PROGRESS -bor $gibFlag)
+                    $modeUnlock = [BitConverter]::GetBytes($modeUnlockVal)
                     $fs.Write($chk0, 0, 8)
                     $fs.Write($failBytes, 0, 2)
                     $fs.Write($modeUnlock, 0, 2)
                     Sync-FileToDisk $fs
+                }
+            }
+
+            $restoredOrigName = $null
+            if ($hasGibberish) {
+                $fs.Seek($dataLen, [System.IO.SeekOrigin]::Begin) | Out-Null
+                $lenBuf = New-Object byte[] 2
+                $readLen = $fs.Read($lenBuf, 0, 2)
+                if ($readLen -eq 2) {
+                    $nameLen = [BitConverter]::ToUInt16($lenBuf, 0)
+                    if ($nameLen -gt 0 -and $nameLen -lt 2048) {
+                        $encName = New-Object byte[] $nameLen
+                        $fs.Read($encName, 0, $nameLen) | Out-Null
+                        $startBlockIdx = [long]([Math]::Ceiling($dataLen / 16.0))
+                        [VaultFastCtr]::ProcessChunk($encryptor, $nonce, $encName, 0, $encName.Length, $startBlockIdx)
+                        try {
+                            $restoredOrigName = [System.Text.Encoding]::UTF8.GetString($encName)
+                        } catch {
+                            $restoredOrigName = $null
+                        }
+                    }
                 }
             }
 
@@ -605,7 +680,7 @@ function Unlock-FileV5($filePath, $pass) {
                 if ($finfo.Length -eq $FOOTER_LEN_V5_RESUMABLE) {
                     if (($pos - $lastSyncPos -ge (1024 * 1024)) -or ($pos -eq $dataLen)) {
                         Sync-FileToDisk $fs
-                        $fs.Seek($dataLen + 92, [System.IO.SeekOrigin]::Begin) | Out-Null
+                        $fs.Seek($totalCipherLen + 92, [System.IO.SeekOrigin]::Begin) | Out-Null
                         $chkBytes = [BitConverter]::GetBytes([uint64]$pos)
                         $fs.Write($chkBytes, 0, 8)
                         Sync-FileToDisk $fs
@@ -619,19 +694,36 @@ function Unlock-FileV5($filePath, $pass) {
             Sync-FileToDisk $fs
             $fs.SetLength($dataLen)
             Sync-FileToDisk $fs
+            $fs.Close()
 
             if ($dataLen -ge (5 * 1024 * 1024)) { Write-Host "" }
 
-            if ($startPos -gt 0) {
-                return @{ Status = "Success"; Message = "Resumed & Fully Restored ($dataLen bytes, resumed from $([Math]::Round($startPos/1MB, 2)) MB)" }
+            if ($hasGibberish -and $restoredOrigName) {
+                $dirName = [System.IO.Path]::GetDirectoryName($filePath)
+                $restoredPath = [System.IO.Path]::Combine($dirName, $restoredOrigName)
+                if ((Test-Path -LiteralPath $restoredPath) -and $restoredPath -ne $filePath) {
+                    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($restoredOrigName)
+                    $ext = [System.IO.Path]::GetExtension($restoredOrigName)
+                    $restoredPath = [System.IO.Path]::Combine($dirName, "${baseName}_restored${ext}")
+                }
+                try {
+                    [System.IO.File]::Move($filePath, $restoredPath)
+                    return @{ Status = "Success"; Message = "Verified & Restored original file $([System.IO.Path]::GetFileName($restoredPath)) ($dataLen bytes)"; NewPath = $restoredPath }
+                } catch {
+                    return @{ Status = "Success"; Message = "Verified & Restored ($dataLen bytes), rename failed: $($_.Exception.Message)"; NewPath = $filePath }
+                }
             }
-            return @{ Status = "Success"; Message = "Verified & Restored 100% full file ($dataLen bytes)" }
+
+            if ($startPos -gt 0) {
+                return @{ Status = "Success"; Message = "Resumed & Fully Restored ($dataLen bytes, resumed from $([Math]::Round($startPos/1MB, 2)) MB)"; NewPath = $filePath }
+            }
+            return @{ Status = "Success"; Message = "Verified & Restored 100% full file ($dataLen bytes)"; NewPath = $filePath }
 
         } else {
-            return @{ Status = "Error"; Message = "Legacy format detected. Please use Python tools/vault.py unlock." }
+            return @{ Status = "Error"; Message = "Legacy format detected. Please use Python tools/vault.py unlock."; NewPath = $filePath }
         }
     } finally {
-        $fs.Close()
+        if ($fs) { $fs.Close() }
     }
 }
 
@@ -665,6 +757,11 @@ function Get-SafeTargetFiles([string]$rootPath) {
                     $subName -eq "__pycache__" -or 
                     $subName -eq ".git" -or 
                     $subName -eq "node_modules" -or
+                    $subName -eq "bin" -or
+                    $subName -eq "cmd" -or
+                    $subName -eq "installers" -or
+                    $subName -eq "android" -or
+                    $subName.StartsWith("releases") -or
                     $subDir.Attributes.HasFlag([System.IO.FileAttributes]::ReparsePoint)) {
                     continue
                 }
@@ -700,13 +797,16 @@ if (Test-Path -LiteralPath $resolvedPath -PathType Leaf) {
 }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "  Universal Vault V5 (Enterprise Grade): $Action Operation" -ForegroundColor Cyan
+Write-Host "  Universal Vault v5.5.3 (Enterprise Grade): $Action Operation" -ForegroundColor Cyan
 Write-Host "  Target Scope: $resolvedPath" -ForegroundColor Cyan
 Write-Host "  Files Identified: $($targetFiles.Count)" -ForegroundColor Cyan
 if ($Action -eq "Lock") {
     Write-Host "  Armor Mode: 100% Full-File Resumable AEAD (Stream Encrypt-then-MAC)" -ForegroundColor Cyan
     Write-Host "  Security: 600,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256" -ForegroundColor Cyan
     Write-Host "  Fault Tolerance: Checkpointed In-Place Streaming (Crash-Safe Resumable)" -ForegroundColor Cyan
+    if ($Gibberish) {
+        Write-Host "  Gibberish Naming: ENABLED (Files renamed to randomized 16-hex hashes)" -ForegroundColor Cyan
+    }
 }
 Write-Host "======================================================================" -ForegroundColor Cyan
 
@@ -748,13 +848,17 @@ foreach ($file in $targetFiles) {
     $rel = $file.Name
     Write-Host "Processing: $rel... "
     if ($Action -eq "Lock") {
-        $res = Lock-FileV5 $file.FullName $Password
+        $res = Lock-FileV5 $file.FullName $Password -Gibberish:$Gibberish
     } else {
         $res = Unlock-FileV5 $file.FullName $Password
     }
 
     if ($res.Status -eq "Success") {
-        Write-Host "  [SUCCESS: $($res.Message)]" -ForegroundColor Green
+        $arrow = ""
+        if ($res.NewPath -and ($res.NewPath -ne $file.FullName)) {
+            $arrow = " -> $([System.IO.Path]::GetFileName($res.NewPath))"
+        }
+        Write-Host "  [SUCCESS$($arrow): $($res.Message)]" -ForegroundColor Green
         $successCount++
     } elseif ($res.Status -eq "Skipped") {
         Write-Host "  [SKIPPED: $($res.Message)]" -ForegroundColor Yellow
