@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="Universal Vault Logo" width="160" style="border-radius: 28px; box-shadow: 0 10px 30px rgba(0,0,0,0.6);" />
 
-# 🛡️ Universal Vault V5.5.3
+# 🛡️ Universal Vault V5.5.4
 
 **Lightweight Sovereign Authenticated Encryption Suite (AEAD)**  
 *Ultra-Lightweight (<3 MB) • Global Terminal-First CLI • 100% In-Place Streaming • Portable by Design*
@@ -28,11 +28,12 @@
 
 Built to eliminate the bloated containers, slow archives, and heavy background daemons of traditional encryption tools:
 * 🪶 **Featherweight**: Statically compiled native binary under **3 MB** with **zero runtime dependencies** (no Python, no Node, no C++ runtime, no administrator privileges required).
-* 🖥️ **Global CLI First**: Install with a single click or script $\to$ use `vault lock` / `vault unlock` / `vault status` from any terminal in any directory.
+* 🖥️ **Global CLI First**: Install with a single click or script $\to$ use `vault lock` / `vault unlock` / `vault view` / `vault status` from any terminal in any directory.
 * 📦 **100% Portable Alternative**: Don't want to install? Run the standalone binary directly from a USB stick, launch the portable 1-click batch/shell scripts, or open the single-file offline WebApp (`Vault_App.html`).
 * ⚡ **True In-Place Transformation (0% Storage Overhead)**: Encrypt a 20 GB database on a disk with only 5 MB of remaining space. No temporary container files, no temp folder disk leaks.
 * 🔒 **Anti-Tamper AEAD (Encrypt-then-MAC)**: Employs master **HMAC-SHA256** authentication over the entire ciphertext payload. Any bit-flipping is detected and rejected before releasing plaintext.
 * 🧯 **Crash-Safe Checkpointing**: Interrupted mid-operation by a power cut, dead laptop battery, or disconnected drive? Vault's 104-byte resumable footer tracks progress on disk so you can resume forward or roll back to your original file with zero data loss.
+* 👁️ **Volatile RAM Inspection (Zero Disk Footprint)**: Inspect text files in terminal stdout, stream rich media (PDF, video, audio, images) via an ephemeral loopback HTTP server directly to your browser, or preview in the Android app — all without writing a single unencrypted byte to physical storage.
 * 📊 **Multi-Phase Live Progress Bar**: Clear real-time visibility showing current phase (`Key Deriv`, `Verifying`, `Decrypting`, `Encrypting`), processed megabytes, live transfer speed, and accurate countdown ETA.
 
 ```
@@ -80,11 +81,11 @@ chmod +x install.sh
 *(Automatically detects native Apple Silicon M1/M2/M3/M4 or Intel, clears Gatekeeper quarantine flags, and registers `~/.local/bin` in `~/.zprofile` and `~/.zshrc`)*
 ### 4. Android (Native App & Complete Suite)
 * **Option A: Standalone APK (Recommended)**:
-  1. Download **`UniversalVault-v5.5.3.apk`** from [Releases](https://github.com/Adil-Arbaz-Khan/Universal-Vault/releases/tag/v5.5.3) or [universal-vault.pages.dev](https://universal-vault.pages.dev/).
+  1. Download **`UniversalVault-v5.5.4.apk`** from [Releases](https://github.com/Adil-Arbaz-Khan/Universal-Vault/releases/tag/v5.5.4) or [universal-vault.pages.dev](https://universal-vault.pages.dev/).
   2. Tap to install on your device (Android 8.0+ / API 26+ up to Android 15+).
-  3. Enjoy 100% in-place SAF streaming, hardware write barriers (`Os.fsync`), crash-safe resumption, real-time password strength meter, gibberish filename masking, and custom cybernetic dark obsidian theme.
+  3. Enjoy 100% in-place SAF streaming, hardware write barriers (`Os.fsync`), crash-safe resumption, real-time password strength meter, gibberish filename masking, and the in-app Volatile RAM Streaming Viewer with 180s auto-wipe panic protocol.
 * **Option B: Merged Android Bundle**:
-  * Download **`Universal-Vault-v5.5.3-Android.zip`** for a complete all-in-one archive containing the native APK, the portable offline web viewer (`Vault_App.html`), and Termux CLI scripts (`setup_termux.sh`, `lock.sh`, `unlock.sh`).
+  * Download **`Universal-Vault-v5.5.4-Android.zip`** for a complete all-in-one archive containing the native APK, the portable offline web viewer (`Vault_App.html`), and Termux CLI scripts (`setup_termux.sh`, `lock.sh`, `unlock.sh`).
 
 ---
 
@@ -96,15 +97,18 @@ If you prefer a zero-footprint workflow without adding anything to your system P
   ```bash
   ./vault lock /path/to/my_data
   ./vault unlock /path/to/my_data
+  ./vault view /path/to/my_data.vault
   ```
 * **Portable 1-Click Launchers (Windows)**:
   * Double-click **`Lock.bat`** to encrypt files/folders in-place.
   * Double-click **`Unlock.bat`** to decrypt and verify integrity.
+  * Double-click **`View.bat`** to view / stream encrypted files directly in RAM.
   * Double-click **`Status.bat`** to inspect the lock state of your files.
 * **Portable Shell Scripts (Linux & macOS)**:
   ```bash
   ./lock.sh /path/to/files
   ./unlock.sh /path/to/files
+  ./view.sh /path/to/files
   ./status.sh /path/to/files
   ```
 * **Offline Browser App (`Vault_App.html`)**:
@@ -197,7 +201,26 @@ vault unlock "7f8a1c9e4b2d3f0a.vault"   # Automatically restores original filena
 vault unlock "backup.tar" -p "MyMasterPassword123"
 ```
 
-### 3. `vault status` — Inspect Lock State
+### 3. `vault view` / `vault stream` — Inspect & Stream in RAM (Zero Disk Writes)
+Decrypts files strictly in volatile memory without writing unencrypted bytes to physical storage. Memory is aggressively zeroized upon termination:
+* **Text / Source Code**: Decrypted and rendered directly to terminal stdout with syntax/terminal encoding.
+* **Rich Media (PDF, Images, Video, Audio)**: Spins up an ephemeral local HTTP range server (`127.0.0.1:<random-port>/<random-token>/<filename>`) with HTTP 206 partial streaming support, auto-launches your default browser, and terminates/zeroizes RAM upon `Ctrl+C`.
+* **Gibberish Vaults**: Seamlessly detects and decrypts masked filenames in-memory to resolve the correct MIME type.
+
+```bash
+# View text or markdown note directly in terminal:
+vault view "secret_notes.txt"
+
+# Stream media / documents into browser with zero disk footprint:
+vault view "Confidential.pdf"
+vault view "Financial_Presentation.mp4"
+vault view "7f8a1c9e4b2d3f0a.vault"   # Resolves original filename & MIME type
+
+# Non-interactive / inline password:
+vault view "Private_Contract.pdf" -p "MyMasterPassword123"
+```
+
+### 4. `vault status` — Inspect Lock State
 Scans files without modifying them to inspect encryption state:
 
 ```bash
@@ -207,7 +230,7 @@ vault status .
 *Example Output:*
 ```text
 ======================================================================
-  Universal Vault v5.5.21 (CLI Native): STATUS Operation
+  Universal Vault v5.5.4 (CLI Native): STATUS Operation
   Target Scope   : /data/projects
   Files Located  : 3
 ======================================================================
@@ -218,7 +241,7 @@ vault status .
 Status Summary: 2 Locked | 1 Unlocked
 ```
 
-### 4. `vault version`
+### 5. `vault version`
 Displays active CLI version and target architecture:
 ```bash
 vault version
@@ -274,14 +297,14 @@ Verify binary integrity against published provenance hashes:
 
 | Platform | Binary / Asset | SHA-256 Checksum |
 | :--- | :--- | :--- |
-| **Windows x86_64** | `vault.exe` | `eac39193ede2aabfa91a293ac9a97936828ce7a842a351cfbe184e8281af7960` |
-| **Linux x86_64** | `vault_linux_amd64` | `60e5966eb8175c092d55d7cd1e521f78ce797bef27d99744510e799c07380ab1` |
-| **Linux ARM64** | `vault_linux_arm64` | `799ffeb11c2bc1a68499468a83098481b42298adbeef6c2318b63dd4faf73e77` |
-| **macOS Apple Silicon** | `vault_darwin_arm64` | `eaf90f2b28acd879796ed618e5d8c82a569ee38e9794943bf5298df97f3325f0` |
-| **macOS Intel** | `vault_darwin_amd64` | `94c10f41a670268fdbe048278b3f5dba091f0c89fb2e8420778a30efd21fe7b9` |
-| **Android Native APK** | `UniversalVault-v5.5.3.apk` | `6f106c7d69ebfd8202e066c71904debfe9fe4090923310a542416d38de9a8065` |
+| **Windows x86_64** | `vault.exe` | `3aa674d54d8fcb37828e9920dfa558b76198036edf1aad39711e6dd69839753f` |
+| **Linux x86_64** | `vault_linux_amd64` | `8a3b1fb7ffda088f0e0dc53de83e654f7042552553a915f0d3ba468321ec06be` |
+| **Linux ARM64** | `vault_linux_arm64` | `1724b5df89e3c872e5ecd4c25ace4532266fba10b24b6324731f8ba292d698b6` |
+| **macOS Apple Silicon** | `vault_darwin_arm64` | `6487fcfaa84989fb4921b92bfeb722aa058e99db1d86486e2ad28f8ad1d68e34` |
+| **macOS Intel** | `vault_darwin_amd64` | `465f775e8dfd42aa0a82ebe0edb0e8e58d3281a86802d6154d6164f229339110` |
+| **Android Native APK** | `UniversalVault-v5.5.4.apk` | `f1e9d77cf66a021d2df5837092dc4eabab3f506b2c723709b212a1823ef5931c` |
 
-*Full verification guide and release history: [RELEASE_NOTES_v5.5.3.md](RELEASE_NOTES_v5.5.3.md)*
+*Full verification guide and release history: [RELEASE_NOTES_v5.5.4.md](RELEASE_NOTES_v5.5.4.md)*
 
 ---
 

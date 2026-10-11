@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 echo =======================================================
-echo    UNIVERSAL VAULT V5.5.3 - AUTHENTICATED AEAD LOCKER
+echo    UNIVERSAL VAULT V5.5.4 - AUTHENTICATED AEAD LOCKER
 echo =======================================================
 
 set "TARGET=%~1"

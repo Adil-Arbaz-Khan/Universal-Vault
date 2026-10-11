@@ -49,7 +49,7 @@ Universal Vault CLI installs as a standalone global terminal command usable from
    ```
    *Output:*
    ```text
-   Universal Vault CLI v5.5.3 (Go Native Architecture)
+   Universal Vault CLI v5.5.4 (Go Native Architecture)
    ```
 
 ---
@@ -66,6 +66,12 @@ Transforms target files into 100% Full-File Authenticated AEAD Ciphertext in-pla
   vault lock "C:\Users\YourName\Documents\Confidential.pdf"
   ```
   *You will be prompted to enter your master password securely.*
+
+* **Lock with Gibberish Filename Masking (`-g` / `--gibberish`)**:
+  ```cmd
+  vault lock "Confidential.pdf" -g
+  ```
+  *Disguises filename to randomized 16-hex hash with `.vault` extension. Restored automatically on unlock.*
 
 * **Lock an Entire Directory (Recursive)**:
   ```cmd
@@ -104,7 +110,19 @@ Verifies HMAC-SHA256 authenticity and restores files back to their exact origina
 
 ---
 
-### 3. `vault status` — Inspect Encryption State
+### 3. `vault view` — Stream Encrypted File in Volatile RAM (Zero Disk Writes)
+Decrypts directly into volatile memory without creating physical plaintext files on disk:
+* **Text & Code Files**: Displayed directly in terminal stdout with auto-zeroized buffer.
+* **Rich Media & Documents (Images, 4K Video, Audio, PDF)**: Spawns an ephemeral local loopback server (`127.0.0.1:<port>`) with unguessable session token, launches default web browser, and supports HTTP 206 range scrubbing. Purges and zeroizes RAM upon pressing Enter or closing session.
+
+```cmd
+vault view "Confidential.pdf"
+vault view "0a1b2c3d4e5f6789.vault"
+```
+
+---
+
+### 4. `vault status` — Inspect Encryption State
 Scans files and displays whether they are unlocked, locked with V5 AEAD armor, locked with legacy formats, or interrupted mid-operation.
 
 ```cmd
@@ -114,7 +132,7 @@ vault status "D:\Projects\SecretProject"
 *Example Output:*
 ```text
 ======================================================================
-  Universal Vault v5.5.3 (CLI Native): STATUS Operation
+  Universal Vault v5.5.4 (CLI Native): STATUS Operation
   Target Scope   : D:\Projects\SecretProject
   Files Located  : 3
 ======================================================================
@@ -127,7 +145,7 @@ Status Summary: 2 Locked | 1 Unlocked
 
 ---
 
-### 4. `vault version`
+### 5. `vault version`
 Displays the active CLI version and architecture.
 ```cmd
 vault version

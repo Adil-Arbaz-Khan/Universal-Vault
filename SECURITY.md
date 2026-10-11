@@ -1,4 +1,4 @@
-# Security Policy & Cryptographic Threat Model (V5.5.3)
+# Security Policy & Cryptographic Threat Model (V5.5.4)
 
 > **Official Website & Live WebApp**: [https://universal-vault.pages.dev/](https://universal-vault.pages.dev/)
 
@@ -6,7 +6,7 @@
 
 | Version | Status | Key Derivation (KDF) | Integrity / Authenticity | Payload Coverage | Fault Tolerance & Footer Format |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **V5.5.3 / V5.5+ (Native CLI, Android & WebApp)** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚡ **Crash-Safe Checkpointed (104-byte Resumable / Two-Way Rollback)** |
+| **V5.5.4 / V5.5+ (Native CLI, Android & WebApp)** | 🟢 **Active / Recommended** | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚡ **Crash-Safe Checkpointed (104-byte Resumable / Two-Way Rollback)** |
 | **V5.0** | 🟢 Supported | PBKDF2-HMAC-SHA256 (600,000 iters) | 🛡️ **Master HMAC-SHA256 (AEAD EtM)** | 🛡️ **100% Full-File AEAD (All Sizes)** | ⚠️ Static Sealed (96-byte Non-Resumable Footer) |
 | **V4.x** | 🟡 Deprecated (Migration Only) | PBKDF2-HMAC-SHA256 (100,000 iters) | ⚠️ Password AuthHash only (No payload MAC) | ⚠️ Hybrid (Full <50MB / Header) | ❌ Non-Resumable |
 | **V3.x - V1.x** | 🔴 End-of-Life | PBKDF2-HMAC-SHA256 (10k-100k iters) | ❌ None | ⚠️ Header-Only (64 KB) | ❌ Non-Resumable |
@@ -19,9 +19,9 @@
 
 ---
 
-## 🔒 Cryptographic Specifications (V5.5.3 Architecture)
+## 🔒 Cryptographic Specifications (V5.5.4 Architecture)
 
-Universal Vault V5.5.3 implements an **Authenticated Encryption with Associated Data (AEAD)** construction following the formal **Encrypt-then-MAC (EtM)** standard (ISO/IEC 18033-4):
+Universal Vault V5.5.4 implements an **Authenticated Encryption with Associated Data (AEAD)** construction following the formal **Encrypt-then-MAC (EtM)** standard (ISO/IEC 18033-4):
 
 ### 1. Zero-Dependency Native Core (Supply-Chain Immunity)
 * The primary CLI engine (`cmd/vault`) is built entirely using the **Go Standard Library** (`crypto/aes`, `crypto/cipher`, `crypto/hmac`, `crypto/sha256`, `crypto/rand`, `crypto/subtle`).
@@ -105,6 +105,25 @@ Universal Vault provides an air-gapped, zero-dependency browser implementation i
   * A dedicated **"Wipe RAM"** button revokes all active Object URLs and releases memory buffers immediately.
 * **Shannon Password Entropy Validation**:
   * Dynamically assesses password entropy in real-time ($E = L \log_2(N)$) to prevent users from encrypting vaults with guessable passwords. Visual tiers classify entropy from Weak (<40 bits) to High-Assurance (80+ bits).
+
+### 9. Volatile RAM Streaming & Anti-Forensic Inspection Protocol (Zero-Disk Footprint)
+
+Universal Vault V5.5.4 introduces unified ephemeral inspection across all native environments (`vault view` / `vault stream` in CLI, `decryptToMemory` in Android, and WebCrypto in `Vault_App.html`), eliminating disk forensics:
+
+* **Zero Plaintext Disk Writes**: Plaintext bytes are never written to physical flash storage, swap containers, or `%Temp%` / `/tmp` staging folders.
+* **CLI Ephemeral Loopback Server**:
+  * Decrypts ciphertext chunks strictly into volatile memory (`[]byte`).
+  * If the target is text/source code, it is rendered directly to terminal stdout, and the memory buffer is zeroized immediately.
+  * For rich media (PDF, images, video, audio), the CLI binds a transient HTTP server strictly to `127.0.0.1` on a dynamic port assigned by the OS kernel.
+  * **Route Isolation**: The endpoint is gated by a 16-hexadecimal cryptographically random token (`http://127.0.0.1:<port>/<token>/<filename>`), preventing local port scanning or cross-process loopback snooping.
+  * **RFC 7233 Range Support**: Handles HTTP 206 partial content requests, allowing smooth scrubbing of high-bitrate audio and 4K video files directly inside standard web browsers.
+  * **Anti-Caching Directives**: Transmits `Cache-Control: no-store, no-cache, must-revalidate, private` and `Pragma: no-cache` headers to prevent browser rendering engines from caching decoded bytes to disk.
+  * **Graceful Termination & Memory Zeroization**: Intercepts `os.Interrupt` / `SIGINT` / `SIGTERM` signals, shuts down the listener socket, and explicitly clears plaintext byte slices (`for i := range plaintext { plaintext[i] = 0 }`).
+* **Android In-App Jetpack Compose RAM Previewer**:
+  * **Heap Safety Barrier**: Evaluates `Runtime.getRuntime().maxMemory() - totalMemory + freeMemory` and enforces a strict 150 MB heap safety threshold prior to memory allocation, preventing `OutOfMemoryError` aborts.
+  * **In-Memory Rendering**: Plaintext documents and decoded `Bitmap` streams are rendered strictly within Jetpack Compose state layers without utilizing `context.cacheDir` or temporary disk storage.
+  * **Active Zeroization (`DisposableEffect`)**: When the preview dialog leaves the composition or is dismissed, `DisposableEffect` executes `bytes.fill(0)` to overwrite all raw decrypted byte buffers in memory.
+  * **Automated Panic Wipe Protocol**: The RAM viewer initiates an active 180-second countdown timer. If left unattended, memory is automatically wiped and the modal closed. A manual "PANIC WIPE" action permits immediate operator-initiated purge.
 
 ---
 

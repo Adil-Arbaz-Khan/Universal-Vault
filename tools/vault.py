@@ -6,6 +6,12 @@ import hashlib
 import hmac
 import getpass
 import argparse
+import secrets
+import mimetypes
+import webbrowser
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import quote, unquote
 
 # Reconfigure stdout/stderr for full Unicode support
 if hasattr(sys.stdout, "reconfigure"):
@@ -19,7 +25,7 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
-VERSION = "5.5.3"
+VERSION = "5.5.4"
 
 MAGIC_V5 = b"VAULTV05"
 MAGIC_V4 = b"VAULTV04"
@@ -664,6 +670,254 @@ def unlock_file_v5(filepath, password):
     except Exception as e:
         return False, f"Error: {e}", filepath
 
+class EphemeralMemoryStreamHandler(BaseHTTPRequestHandler):
+    data = b""
+    mime_type = "application/octet-stream"
+    filename = "stream"
+    token = ""
+
+    def log_message(self, format, *args):
+        pass  # Suppress console HTTP access logs
+
+    def do_GET(self):
+        parts = self.path.strip("/").split("/")
+        if len(parts) < 1 or parts[0] != self.token:
+            self.send_error(404, "Not Found")
+            return
+
+        total_len = len(self.data)
+        range_header = self.headers.get("Range")
+
+        if range_header and range_header.startswith("bytes="):
+            try:
+                ranges = range_header[6:].split("-")
+                start = int(ranges[0]) if ranges[0] else 0
+                end = int(ranges[1]) if len(ranges) > 1 and ranges[1] else total_len - 1
+                if start >= total_len:
+                    self.send_error(416, "Requested Range Not Satisfiable")
+                    return
+                end = min(end, total_len - 1)
+                content_length = end - start + 1
+
+                self.send_response(206)
+                self.send_header("Content-Type", self.mime_type)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{total_len}")
+                self.send_header("Content-Length", str(content_length))
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Cache-Control", "no-store, private")
+                self.end_headers()
+                self.wfile.write(self.data[start:end+1])
+            except Exception:
+                self.send_error(500, "Internal Server Error")
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", self.mime_type)
+            self.send_header("Content-Length", str(total_len))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store, private")
+            self.end_headers()
+            self.wfile.write(self.data)
+
+def guess_mime_type(filename, data):
+    ext = os.path.splitext(filename)[1].lower()
+    text_exts = {
+        ".txt", ".log", ".md", ".csv", ".tsv", ".env", ".yaml", ".yml",
+        ".ini", ".conf", ".toml", ".py", ".go", ".rs", ".c", ".cpp",
+        ".h", ".hpp", ".java", ".kt", ".kts", ".sh", ".bat", ".cmd", ".ps1",
+        ".html", ".htm", ".css", ".js", ".json", ".xml"
+    }
+    if ext in text_exts:
+        if ext in (".html", ".htm"):
+            return "text/html; charset=utf-8"
+        if ext == ".css":
+            return "text/css; charset=utf-8"
+        if ext == ".js":
+            return "application/javascript; charset=utf-8"
+        if ext == ".json":
+            return "application/json; charset=utf-8"
+        if ext == ".xml":
+            return "application/xml; charset=utf-8"
+        return "text/plain; charset=utf-8"
+
+    mime, _ = mimetypes.guess_type(filename)
+    if mime:
+        return mime
+    return "application/octet-stream"
+
+def is_text_data(data, mime):
+    if mime and (mime.startswith("text/") or "json" in mime or "xml" in mime or "javascript" in mime):
+        return True
+    sample = data[:1024]
+    if b"\x00" in sample:
+        return False
+    try:
+        sample.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+def view_file_v5(filepath, password):
+    try:
+        size = os.path.getsize(filepath)
+        fname = os.path.basename(filepath)
+        with open(filepath, "rb") as f:
+            res = read_footer(f, size)
+            if not res or not res[0]:
+                return False, "File is not locked or has unsupported format"
+            version, footer, footer_len = res
+
+            if version != 5:
+                return False, "RAM Streaming currently requires V5 authenticated format"
+
+            has_gibberish = False
+            checkpoint = 0
+            fails = 0
+            state = STATE_NORMAL_LOCKED
+
+            if footer_len == FOOTER_LEN_V5_RESUMABLE:
+                checkpoint, fails, state = struct.unpack("<QHH", footer[92:104])
+                has_gibberish = bool(state & FLAG_GIBBERISH_NAME)
+            else:
+                fails, state = struct.unpack("<HH", footer[92:96])
+                has_gibberish = bool(state & FLAG_GIBBERISH_NAME)
+
+            interrupted = state & 3
+            if interrupted != 0:
+                which = "LOCK" if interrupted == 1 else "UNLOCK"
+                return False, f"Interrupted {which} state detected. Please resume or rollback before viewing in RAM."
+
+            total_cipher_len = size - footer_len
+            data_len = checkpoint if has_gibberish else total_cipher_len
+
+            if fails >= 10:
+                return False, f"BRUTE-FORCE LOCKOUT ACTIVE ({fails} failed attempts)."
+
+            salt = footer[12:28]
+            nonce = footer[28:44]
+            stored_mac = footer[44:76]
+            stored_auth_tag = footer[76:92]
+
+            enc_key, mac_key, computed_auth_tag = derive_keys_v5(password, salt)
+            if not hmac.compare_digest(stored_auth_tag, computed_auth_tag):
+                return False, "INCORRECT PASSWORD"
+
+            # Verify Master HMAC
+            f.seek(0)
+            hmac_verify = hmac.new(mac_key, digestmod=hashlib.sha256)
+            p = 0
+            start_t = time.time()
+            while p < total_cipher_len:
+                take = min(CHUNK_SIZE_V5, total_cipher_len - p)
+                chunk = f.read(take)
+                hmac_verify.update(chunk)
+                p += take
+                render_progress(fname, p, total_cipher_len, start_t, "Verifying")
+
+            computed_mac = hmac_verify.digest()
+            if not hmac.compare_digest(stored_mac, computed_mac):
+                clear_progress_line()
+                return False, "INTEGRITY ERROR: Master HMAC verification failed! Ciphertext has been modified or corrupted."
+
+            # Recover original name if disguised
+            restored_orig_name = None
+            if has_gibberish:
+                f.seek(data_len)
+                len_bytes = f.read(2)
+                if len(len_bytes) == 2:
+                    name_len = struct.unpack("<H", len_bytes)[0]
+                    if 0 < name_len < 2048:
+                        enc_name = f.read(name_len)
+                        start_block = (data_len + 15) // 16
+                        dec_name = aes_ctr_process(enc_key, nonce, enc_name, initial_counter=start_block)
+                        restored_orig_name = dec_name.decode("utf-8", errors="replace")
+
+            # Decrypt full data into memory buffer
+            decrypted = bytearray(data_len)
+            f.seek(0)
+            pos = 0
+            block_idx = 0
+            decrypt_t = time.time()
+
+            while pos < data_len:
+                take = min(CHUNK_SIZE_V5, data_len - pos)
+                cipher_chunk = f.read(take)
+                initial_block = block_idx * (CHUNK_SIZE_V5 // 16)
+                plain_chunk = aes_ctr_process(enc_key, nonce, cipher_chunk, initial_counter=initial_block)
+                decrypted[pos:pos+take] = plain_chunk
+                pos += take
+                block_idx += 1
+                render_progress(restored_orig_name or fname, pos, data_len, decrypt_t, "Decrypting")
+
+        clear_progress_line()
+
+        def wipe_memory():
+            for i in range(len(decrypted)):
+                decrypted[i] = 0
+
+        display_name = restored_orig_name or fname
+        mime = guess_mime_type(display_name, decrypted)
+
+        if is_text_data(decrypted, mime):
+            print()
+            print(f"--- [RAM STREAM: {display_name} ({data_len} bytes, {mime})] ---")
+            try:
+                print(decrypted.decode("utf-8"))
+            except Exception:
+                print(decrypted.decode("utf-8", errors="replace"))
+            print(f"--- [END OF RAM STREAM - VOLATILE MEMORY PURGED] ---")
+            wipe_memory()
+            return True, f"Displayed in terminal ({data_len} bytes, zero disk footprints)"
+
+        # Ephemeral loopback HTTP streaming server for media & PDF
+        session_token = secrets.token_hex(8)
+
+        class CustomHandler(EphemeralMemoryStreamHandler):
+            pass
+
+        CustomHandler.data = decrypted
+        CustomHandler.mime_type = mime
+        CustomHandler.filename = display_name
+        CustomHandler.token = session_token
+
+        server = HTTPServer(("127.0.0.1", 0), CustomHandler)
+        port = server.server_address[1]
+        safe_name = quote(os.path.basename(display_name))
+        stream_url = f"http://127.0.0.1:{port}/{session_token}/{safe_name}"
+
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+
+        print()
+        print(f"[+] Volatile RAM Server Active : http://127.0.0.1:{port}")
+        print(f"[+] Ephemeral Stream URL       : {stream_url}")
+        print(f"[+] MIME Classification        : {mime}")
+        print(f"[+] File Size in Volatile RAM  : {data_len} bytes ({data_len / (1024*1024):.2f} MB)")
+        print("    [!] Absolute Zero Disk Writes: Plaintext exists ONLY in volatile RAM.")
+        print("    [!] Range requests (HTTP 206) active for fluid media scrubbing.")
+        print()
+        print("[*] Opening default web browser... ", end="", flush=True)
+        try:
+            webbrowser.open(stream_url)
+            print("Launched.")
+        except Exception as e:
+            print(f"Failed: {e} (You may open the URL manually)")
+
+        print()
+        print(">>> Press [ENTER] or Ctrl+C to terminate ephemeral stream and wipe RAM <<<")
+        try:
+            sys.stdin.readline()
+        except KeyboardInterrupt:
+            print("\nInterrupt signal caught.")
+
+        server.shutdown()
+        server.server_close()
+        wipe_memory()
+        print("[+] Session closed. Volatile RAM securely overwritten and purged.")
+        return True, f"RAM Stream Completed for {display_name} ({data_len} bytes)"
+
+    except Exception as e:
+        return False, f"Error: {e}"
+
 def resolve_targets(path):
     path = os.path.abspath(path.strip('\'"'))
     if os.path.islink(path):
@@ -708,6 +962,10 @@ def process_targets(action, path, password=None, gibberish=False):
             print(f"  File Names: Standard In-Place")
         print(f"  Security: 600,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256")
         print(f"  Fault Tolerance: Checkpointed In-Place Streaming (Crash-Safe Resumable)")
+    elif action in ("view", "stream"):
+        print(f"  Armor Mode: Volatile RAM Ephemeral Stream (Zero Disk Writes)")
+        print(f"  Security: 600,000 PBKDF2-SHA256 Rounds | Master HMAC Verification")
+        print(f"  Volatile Memory: Auto-Zeroized On Session Termination")
     print("=" * 70)
 
     if not targets:
@@ -728,6 +986,27 @@ def process_targets(action, path, password=None, gibberish=False):
                 unlocked_count += 1
         print("-" * 70)
         print(f"Status Summary: {locked_count} Locked | {unlocked_count} Unlocked\n")
+        return
+
+    if action in ("view", "stream"):
+        target_file = None
+        for p in targets:
+            st = check_file_status(p)
+            if st.startswith("locked"):
+                target_file = p
+                break
+        if not target_file:
+            if len(targets) == 1:
+                target_file = targets[0]
+            else:
+                print("Error: No locked file found in target scope to view in RAM.\n")
+                return
+
+        ok, msg = view_file_v5(target_file, password)
+        if not ok:
+            print(f"\n[FAILED: {msg}]\n")
+            sys.exit(1)
+        print(f"\n[SUCCESS: {msg}]\n")
         return
 
     success_count = 0
@@ -765,7 +1044,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     parser = argparse.ArgumentParser(description=f"Universal Vault v{VERSION}: Authenticated Full-File In-Place Encryption Suite")
-    parser.add_argument("action", choices=["lock", "unlock", "status", "version"], help="Action to perform")
+    parser.add_argument("action", choices=["lock", "unlock", "view", "stream", "status", "version"], help="Action to perform")
     parser.add_argument("path", nargs="?", default=".", help="Specific file or directory path (default: current directory)")
     parser.add_argument("-p", "--password", help="Master password (optional, prompted securely if omitted)")
     parser.add_argument("-g", "--gibberish", action="store_true", help="Format file names to random 16-hex hashes with .vault extension")
@@ -778,9 +1057,10 @@ if __name__ == "__main__":
         sys.exit(0)
 
     password = args.password
-    if args.action in ("lock", "unlock") and not password:
+    if args.action in ("lock", "unlock", "view", "stream") and not password:
+        prompt_label = "STREAM IN RAM" if args.action in ("view", "stream") else args.action.upper()
         if sys.stdin.isatty():
-            password = getpass.getpass(f"Enter Master Password to {args.action.upper()}: ")
+            password = getpass.getpass(f"Enter Master Password to {prompt_label}: ")
         else:
             line = sys.stdin.readline()
             password = line.strip() if line else ""

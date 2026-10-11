@@ -1,6 +1,6 @@
 #!/bin/bash
 echo "======================================================="
-echo "   UNIVERSAL VAULT V5.5.3 - AUTHENTICATED AEAD LOCKER"
+echo "   UNIVERSAL VAULT V5.5.4 - AUTHENTICATED AEAD LOCKER"
 echo "======================================================="
 
 DIR="$(cd "$(dirname "$0")" && pwd)"

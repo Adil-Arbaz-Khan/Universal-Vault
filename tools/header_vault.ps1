@@ -797,7 +797,7 @@ if (Test-Path -LiteralPath $resolvedPath -PathType Leaf) {
 }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "  Universal Vault v5.5.3 (Enterprise Grade): $Action Operation" -ForegroundColor Cyan
+Write-Host "  Universal Vault v5.5.4 (Enterprise Grade): $Action Operation" -ForegroundColor Cyan
 Write-Host "  Target Scope: $resolvedPath" -ForegroundColor Cyan
 Write-Host "  Files Identified: $($targetFiles.Count)" -ForegroundColor Cyan
 if ($Action -eq "Lock") {

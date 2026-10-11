@@ -136,6 +136,12 @@ object VaultEngine {
         val newFileName: String? = null
     )
 
+    data class DecryptedMemoryResult(
+        val bytes: ByteArray,
+        val originalName: String? = null,
+        val dataLen: Long
+    )
+
     data class FooterInfo(
         val version: Int,
         val length: Int,
@@ -781,5 +787,130 @@ object VaultEngine {
             "Verified & Restored 100% full file ($dataLen bytes)"
         }
         return Result.success(VaultOperationResult(successMsg, restoredOrigName))
+    }
+
+    fun decryptToMemory(
+        channel: FileChannel,
+        size: Long,
+        password: String,
+        listener: ProgressListener? = null
+    ): Result<DecryptedMemoryResult> = decryptToMemory(FileChannelVaultChannel(channel), size, password, listener)
+
+    fun decryptToMemory(
+        channel: VaultChannel,
+        size: Long,
+        password: String,
+        listener: ProgressListener? = null
+    ): Result<DecryptedMemoryResult> {
+        val footer = readFooter(channel, size)
+            ?: return Result.failure(IllegalStateException("File is not locked or has unsupported format"))
+
+        val interrupted = footer.stateFlags and 3
+        if (interrupted != 0) {
+            val which = if (interrupted == STATE_LOCK_IN_PROGRESS) "LOCK" else "UNLOCK"
+            return Result.failure(IllegalStateException("Interrupted $which state detected. Please resume or rollback before viewing in RAM."))
+        }
+
+        val hasGibberish = (footer.stateFlags and FLAG_GIBBERISH_NAME) != 0
+        val totalCipherLen = size - footer.length
+        val dataLen = if (hasGibberish && footer.checkpoint > 0 && footer.checkpoint < totalCipherLen) {
+            footer.checkpoint
+        } else {
+            totalCipherLen
+        }
+
+        if (dataLen > 150L * 1024 * 1024) {
+            return Result.failure(IllegalStateException("File is too large for Android volatile RAM streaming (${"%.1f".format(dataLen / (1024.0 * 1024.0))} MB exceeds 150 MB safety threshold)"))
+        }
+
+        listener?.onProgress("Key Derivation", 0L, dataLen, 0.0, 0L)
+        val (encKey, macKey, authTag) = deriveKeys(password, footer.salt)
+
+        if (!MessageDigest.isEqual(authTag, footer.authTag)) {
+            val fails = footer.failedAttempts + 1
+            val rem = maxOf(0, 10 - fails)
+            return Result.failure(SecurityException("Incorrect password ($fails failed attempts, $rem left before lockout)"))
+        }
+
+        // Master HMAC Verification
+        val hmac = Mac.getInstance("HmacSHA256").apply {
+            init(SecretKeySpec(macKey, "HmacSHA256"))
+        }
+        val chunkBuf = ByteArray(CHUNK_SIZE_V5)
+        var p = 0L
+        val verifyStartTime = System.currentTimeMillis()
+        while (p < totalCipherLen) {
+            val take = minOf(CHUNK_SIZE_V5.toLong(), totalCipherLen - p).toInt()
+            channel.position(p)
+            val byteBuf = ByteBuffer.wrap(chunkBuf, 0, take)
+            channel.read(byteBuf)
+            hmac.update(chunkBuf, 0, take)
+            p += take
+
+            val elapsedSec = maxOf(0.001, (System.currentTimeMillis() - verifyStartTime) / 1000.0)
+            val speed = (p / elapsedSec) / (1024 * 1024)
+            val remBytes = totalCipherLen - p
+            val etaSec = if (speed > 0) (remBytes / (speed * 1024 * 1024)).toLong() else 0L
+            listener?.onProgress("Verifying Integrity", p, totalCipherLen, speed, etaSec)
+        }
+
+        val computedMac = hmac.doFinal()
+        if (!MessageDigest.isEqual(computedMac, footer.masterMac)) {
+            return Result.failure(SecurityException("INTEGRITY ERROR: Ciphertext has been modified or corrupted! Decryption halted."))
+        }
+
+        val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+        val keySpec = SecretKeySpec(encKey, "AES")
+
+        var restoredOrigName: String? = null
+        if (hasGibberish) {
+            try {
+                channel.position(dataLen)
+                val lenBuf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN)
+                channel.read(lenBuf)
+                lenBuf.flip()
+                val nameLen = lenBuf.getShort().toInt() and 0xFFFF
+                if (nameLen in 1..2047 && dataLen + 2 + nameLen <= totalCipherLen) {
+                    val encNameBuf = ByteBuffer.allocate(nameLen)
+                    channel.read(encNameBuf)
+                    val metaBlockOffset = (dataLen + 15) / 16
+                    val metaCounter = makeCounter(footer.nonce, metaBlockOffset)
+                    val metaCipher = Cipher.getInstance("AES/CTR/NoPadding")
+                    metaCipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(metaCounter))
+                    val decNameBytes = metaCipher.doFinal(encNameBuf.array())
+                    restoredOrigName = String(decNameBytes, Charsets.UTF_8)
+                }
+            } catch (e: Exception) {
+                // Ignore metadata recovery error
+            }
+        }
+
+        // Stream into volatile memory buffer without writing to disk
+        val memoryBytes = ByteArray(dataLen.toInt())
+        var pos = 0L
+        var blockIdx = 0L
+        val decryptStartTime = System.currentTimeMillis()
+
+        while (pos < dataLen) {
+            val take = minOf(CHUNK_SIZE_V5.toLong(), dataLen - pos).toInt()
+            channel.position(pos)
+            val byteBuf = ByteBuffer.wrap(chunkBuf, 0, take)
+            channel.read(byteBuf)
+
+            val counter = makeCounter(footer.nonce, blockIdx * (CHUNK_SIZE_V5 / 16))
+            cipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(counter))
+            cipher.update(chunkBuf, 0, take, memoryBytes, pos.toInt())
+
+            pos += take
+            blockIdx++
+
+            val elapsedSec = maxOf(0.001, (System.currentTimeMillis() - decryptStartTime) / 1000.0)
+            val speed = (pos / elapsedSec) / (1024 * 1024)
+            val remBytes = dataLen - pos
+            val etaSec = if (speed > 0) (remBytes / (speed * 1024 * 1024)).toLong() else 0L
+            listener?.onProgress("Decrypting to RAM", pos, dataLen, speed, etaSec)
+        }
+
+        return Result.success(DecryptedMemoryResult(memoryBytes, restoredOrigName, dataLen))
     }
 }

@@ -13,6 +13,7 @@ import com.adil.universalvault.crypto.VaultEngine
 import com.adil.universalvault.ui.*
 import com.adil.universalvault.ui.theme.UniversalVaultTheme
 import android.content.Context
+import android.webkit.MimeTypeMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -25,6 +26,7 @@ class MainActivity : ComponentActivity() {
     private var progressState by mutableStateOf(ProgressState())
     private var resultMessageState by mutableStateOf<String?>(null)
     private var isErrorState by mutableStateOf(false)
+    private var ramViewerDataState by mutableStateOf<RamViewerData?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,7 +49,13 @@ class MainActivity : ComponentActivity() {
                     onFileSelected = { uri -> loadFile(uri) },
                     onLockClicked = { password, gibberish -> executeLock(password, gibberish) },
                     onUnlockClicked = { password -> executeUnlock(password) },
-                    onClearResult = { resultMessageState = null }
+                    onStreamClicked = { password -> executeStream(password) },
+                    onClearResult = { resultMessageState = null },
+                    ramViewerData = ramViewerDataState,
+                    onCloseRamViewer = {
+                        ramViewerDataState?.bytes?.fill(0)
+                        ramViewerDataState = null
+                    }
                 )
             }
         }
@@ -277,6 +285,76 @@ class MainActivity : ComponentActivity() {
                         )
                     } else {
                         resultMessageState = result.exceptionOrNull()?.message ?: "Unlock failed"
+                        isErrorState = true
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    progressState = ProgressState(isRunning = false)
+                    resultMessageState = e.localizedMessage ?: "Operation failed"
+                    isErrorState = true
+                }
+            }
+        }
+    }
+
+    private fun executeStream(password: String) {
+        val fileInfo = selectedFileState ?: return
+        progressState = ProgressState(isRunning = true, phase = "Deriving Keys...")
+        resultMessageState = null
+        isErrorState = false
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val pfd = contentResolver.openFileDescriptor(fileInfo.uri, "r")
+                    ?: throw IllegalStateException("Cannot open file descriptor for reading")
+
+                val channel = FileDescriptorVaultChannel(pfd.fileDescriptor)
+                val result = VaultEngine.decryptToMemory(
+                    channel = channel,
+                    size = fileInfo.size,
+                    password = password,
+                    listener = object : VaultEngine.ProgressListener {
+                        override fun onProgress(
+                            phase: String,
+                            currentBytes: Long,
+                            totalBytes: Long,
+                            speedMBps: Double,
+                            etaSeconds: Long
+                        ) {
+                            lifecycleScope.launch(Dispatchers.Main) {
+                                progressState = ProgressState(
+                                    isRunning = true,
+                                    phase = phase,
+                                    currentBytes = currentBytes,
+                                    totalBytes = totalBytes,
+                                    speedMBps = speedMBps,
+                                    etaSeconds = etaSeconds
+                                )
+                            }
+                        }
+                    }
+                )
+                pfd.close()
+
+                withContext(Dispatchers.Main) {
+                    progressState = ProgressState(isRunning = false)
+                    if (result.isSuccess) {
+                        val memoryRes = result.getOrThrow()
+                        val displayName = memoryRes.originalName ?: fileInfo.name
+                        val ext = displayName.substringAfterLast('.', "").lowercase()
+                        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+
+                        ramViewerDataState = RamViewerData(
+                            bytes = memoryRes.bytes,
+                            fileName = displayName,
+                            fileSize = memoryRes.dataLen,
+                            mimeType = mime
+                        )
+                        resultMessageState = "Decrypted into volatile RAM (${memoryRes.dataLen} bytes, zero disk footprints)"
+                        isErrorState = false
+                    } else {
+                        resultMessageState = result.exceptionOrNull()?.message ?: "Stream decryption failed"
                         isErrorState = true
                     }
                 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -10,16 +11,23 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const (
-	Version = "5.5.3"
+	Version = "5.5.4"
 
 	MagicV5 = "VAULTV05"
 	MagicV4 = "VAULTV04"
@@ -51,7 +59,7 @@ var excludedExts = map[string]bool{
 var excludedDirs = map[string]bool{
 	"tools": true, ".vault": true, ".git": true, "__pycache__": true,
 	"node_modules": true, ".vscode": true, ".idea": true, "cmd": true,
-	"bin": true, "installers": true, "releases_v5.5.1": true, "releases_v5.5.2": true, "releases_v5.5.21": true, "releases_v5.5.3": true, "android": true,
+	"bin": true, "installers": true, "releases_v5.5.1": true, "releases_v5.5.2": true, "releases_v5.5.21": true, "releases_v5.5.3": true, "releases_v5.5.4": true, "android": true,
 }
 
 func pbkdf2SHA256(password []byte, salt []byte, iter int, keyLen int) []byte {
@@ -833,6 +841,316 @@ func unlockFileV5(filePath string, password string) (bool, string, string) {
 	return false, "Legacy format detected. Please unlock with python tools/vault.py unlock.", filePath
 }
 
+func getMimeType(filename string, data []byte) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".js", ".mjs":
+		return "application/javascript; charset=utf-8"
+	case ".json":
+		return "application/json; charset=utf-8"
+	case ".xml":
+		return "application/xml; charset=utf-8"
+	case ".txt", ".log", ".md", ".csv", ".tsv", ".env", ".yaml", ".yml", ".ini", ".conf", ".toml":
+		return "text/plain; charset=utf-8"
+	case ".py", ".go", ".rs", ".c", ".cpp", ".h", ".hpp", ".java", ".kt", ".kts", ".sh", ".bat", ".cmd", ".ps1":
+		return "text/plain; charset=utf-8"
+	case ".pdf":
+		return "application/pdf"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".svg":
+		return "image/svg+xml"
+	case ".mp4":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	case ".mov":
+		return "video/quicktime"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".ogg":
+		return "audio/ogg"
+	case ".flac":
+		return "audio/flac"
+	}
+	sniffLen := len(data)
+	if sniffLen > 512 {
+		sniffLen = 512
+	}
+	if sniffLen > 0 {
+		return http.DetectContentType(data[:sniffLen])
+	}
+	return "application/octet-stream"
+}
+
+func isTextContent(mime string, data []byte) bool {
+	if strings.HasPrefix(mime, "text/") || strings.Contains(mime, "json") || strings.Contains(mime, "xml") || strings.Contains(mime, "javascript") {
+		return true
+	}
+	checkLen := len(data)
+	if checkLen > 1024 {
+		checkLen = 1024
+	}
+	if checkLen == 0 {
+		return true
+	}
+	for i := 0; i < checkLen; i++ {
+		if data[i] == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func openBrowser(url string) error {
+	switch runtime.GOOS {
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		return exec.Command("open", url).Start()
+	default:
+		return exec.Command("xdg-open", url).Start()
+	}
+}
+
+func viewFileV5(filePath string, password string) (bool, string) {
+	fi, err := os.Lstat(filePath)
+	if err != nil {
+		return false, err.Error()
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return false, "Symlink skipped"
+	}
+	size := fi.Size()
+	fname := filepath.Base(filePath)
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return false, err.Error()
+	}
+	defer f.Close()
+
+	info, _ := readFileFooter(f, size)
+	if info == nil || info.Version == -1 {
+		return false, "File is not locked or has unsupported format"
+	}
+
+	if (info.StateFlags & 3) != 0 {
+		which := "LOCK"
+		if (info.StateFlags & 3) == StateUnlockInProgress {
+			which = "UNLOCK"
+		}
+		return false, fmt.Sprintf("Interrupted %s state detected. Please resume or rollback before viewing in RAM.", which)
+	}
+
+	hasGibberish := (info.StateFlags & FlagGibberishName) != 0
+	totalCipherLen := size - info.Length
+	dataLen := totalCipherLen
+	if hasGibberish {
+		dataLen = int64(info.Checkpoint)
+	}
+
+	if info.Version != 5 {
+		return false, "RAM Streaming currently requires V5 authenticated format"
+	}
+
+	salt := info.Footer[12:28]
+	nonce := info.Footer[28:44]
+	storedMac := info.Footer[44:76]
+	storedAuthTag := info.Footer[76:92]
+
+	if info.FailedAttempts >= 10 {
+		return false, fmt.Sprintf("BRUTE-FORCE LOCKOUT ACTIVE (%d failed attempts).", info.FailedAttempts)
+	}
+
+	renderPhaseNotice("Key Deriv", fname, "Computing 600,000 PBKDF2 rounds...")
+	encKey, macKey, computedAuthTag := deriveKeysV5(password, salt)
+	if subtle.ConstantTimeCompare(storedAuthTag, computedAuthTag) != 1 {
+		clearProgressLine()
+		return false, "INCORRECT PASSWORD"
+	}
+
+	// Verify Master HMAC
+	f.Seek(0, io.SeekStart)
+	h := hmac.New(sha256.New, macKey)
+	p := int64(0)
+	buf := make([]byte, ChunkSizeV5)
+	verifyT := time.Now()
+	for p < totalCipherLen {
+		t := int64(ChunkSizeV5)
+		if totalCipherLen-p < t {
+			t = totalCipherLen - p
+		}
+		io.ReadFull(f, buf[:t])
+		h.Write(buf[:t])
+		p += t
+		renderProgress("Verifying", fname, p, totalCipherLen, verifyT)
+	}
+	computedMac := h.Sum(nil)
+	if subtle.ConstantTimeCompare(storedMac, computedMac) != 1 {
+		clearProgressLine()
+		return false, "INTEGRITY ERROR: Master HMAC verification failed! Ciphertext has been modified or corrupted."
+	}
+
+	block, _ := aes.NewCipher(encKey)
+
+	// Check if filename was disguised
+	restoredOrigName := fname
+	if hasGibberish {
+		f.Seek(dataLen, io.SeekStart)
+		var lenBuf [2]byte
+		io.ReadFull(f, lenBuf[:])
+		nameLen := binary.LittleEndian.Uint16(lenBuf[:])
+		if nameLen > 0 && nameLen < 2048 {
+			encName := make([]byte, nameLen)
+			io.ReadFull(f, encName)
+			startBlockIdx := uint64((dataLen + 15) / 16)
+			nameCtr := makeCounter(nonce, startBlockIdx)
+			nameStream := cipher.NewCTR(block, nameCtr)
+			decName := make([]byte, nameLen)
+			nameStream.XORKeyStream(decName, encName)
+			restoredOrigName = string(decName)
+		}
+	}
+
+	// Allocate in-memory buffer
+	decrypted := make([]byte, dataLen)
+	pos := int64(0)
+	blockIdx := int64(0)
+	decryptT := time.Now()
+
+	for pos < dataLen {
+		take := int64(ChunkSizeV5)
+		if dataLen-pos < take {
+			take = dataLen - pos
+		}
+		f.Seek(pos, io.SeekStart)
+		io.ReadFull(f, decrypted[pos:pos+take])
+
+		ctr := makeCounter(nonce, uint64(blockIdx*(ChunkSizeV5/16)))
+		stream := cipher.NewCTR(block, ctr)
+		stream.XORKeyStream(decrypted[pos:pos+take], decrypted[pos:pos+take])
+
+		pos += take
+		blockIdx++
+		renderProgress("Decrypting to RAM", restoredOrigName, pos, dataLen, decryptT)
+	}
+	clearProgressLine()
+
+	// Safe zeroization helper
+	wipeMemory := func() {
+		for i := range decrypted {
+			decrypted[i] = 0
+		}
+	}
+
+	mimeType := getMimeType(restoredOrigName, decrypted)
+	isText := isTextContent(mimeType, decrypted)
+
+	if isText {
+		fmt.Println()
+		fmt.Printf("--- [RAM STREAM: %s (%d bytes, %s)] ---\n", restoredOrigName, dataLen, mimeType)
+		fmt.Print(string(decrypted))
+		if len(decrypted) > 0 && decrypted[len(decrypted)-1] != '\n' {
+			fmt.Println()
+		}
+		fmt.Printf("--- [END OF RAM STREAM - VOLATILE MEMORY PURGED] ---\n")
+		wipeMemory()
+		return true, fmt.Sprintf("Displayed in terminal (%d bytes, zero disk footprints)", dataLen)
+	}
+
+	// For rich media / binary documents: Launch ephemeral loopback HTTP server
+	tokenBytes := make([]byte, 16)
+	rand.Read(tokenBytes)
+	sessionToken := hex.EncodeToString(tokenBytes)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		wipeMemory()
+		return false, fmt.Sprintf("Failed to bind ephemeral server: %v", err)
+	}
+	defer listener.Close()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	streamURL := fmt.Sprintf("http://127.0.0.1:%d/%s/%s", port, sessionToken, filepath.Base(restoredOrigName))
+
+	mux := http.NewServeMux()
+	fileReader := bytes.NewReader(decrypted)
+	modTime := time.Now()
+
+	mux.HandleFunc(fmt.Sprintf("/%s/", sessionToken), func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
+		w.Header().Set("Content-Type", mimeType)
+		http.ServeContent(w, r, restoredOrigName, modTime, fileReader)
+	})
+
+	server := &http.Server{Handler: mux}
+
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	}()
+
+	fmt.Println()
+	fmt.Printf("[+] Volatile RAM Server Active : http://127.0.0.1:%d\n", port)
+	fmt.Printf("[+] Ephemeral Stream URL       : %s\n", streamURL)
+	fmt.Printf("[+] MIME Classification        : %s\n", mimeType)
+	fmt.Printf("[+] File Size in Volatile RAM  : %d bytes (%.2f MB)\n", dataLen, float64(dataLen)/(1024*1024))
+	fmt.Println("    [!] Absolute Zero Disk Writes: Plaintext exists ONLY in volatile RAM.")
+	fmt.Println("    [!] Range requests (HTTP 206) active for fluid media scrubbing.")
+	fmt.Println()
+	fmt.Print("[*] Opening default web browser... ")
+	if err := openBrowser(streamURL); err != nil {
+		fmt.Printf("Failed: %v (You may open the URL manually)\n", err)
+	} else {
+		fmt.Println("Launched.")
+	}
+
+	fmt.Println()
+	fmt.Println(">>> Press [ENTER] or Ctrl+C to terminate ephemeral stream and wipe RAM <<<")
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	done := make(chan struct{})
+	go func() {
+		bufio.NewReader(os.Stdin).ReadString('\n')
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-sigChan:
+		fmt.Println("\nInterrupt signal caught.")
+	case err := <-serverErr:
+		fmt.Printf("\nServer error: %v\n", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	server.Shutdown(ctx)
+
+	wipeMemory()
+	fmt.Println("[+] Session closed. Volatile RAM securely overwritten and purged.")
+	return true, fmt.Sprintf("RAM Stream Completed for %s (%d bytes)", restoredOrigName, dataLen)
+}
+
 func resolveTargets(targetPath string) []string {
 	cleanPath := strings.Trim(targetPath, "\"' ")
 	absPath, err := filepath.Abs(cleanPath)
@@ -928,6 +1246,10 @@ func printBanner(action, targetPath string, targetsCount int, gibberish bool) {
 		}
 		fmt.Println("  Security       : 600,000 PBKDF2-SHA256 Rounds | Anti-Tampering HMAC-SHA256")
 		fmt.Println("  Fault Tolerance: Checkpointed In-Place Streaming (Crash-Safe Resumable)")
+	} else if action == "view" || action == "stream" {
+		fmt.Println("  Armor Mode     : Volatile RAM Ephemeral Stream (Zero Disk Writes)")
+		fmt.Println("  Security       : 600,000 PBKDF2-SHA256 Rounds | Master HMAC Verification")
+		fmt.Println("  Volatile Memory: Auto-Zeroized On Session Termination")
 	}
 	fmt.Println(strings.Repeat("=", 70))
 }
@@ -938,6 +1260,7 @@ func main() {
 		fmt.Println("Usage:")
 		fmt.Println("  vault lock   <path> [-p password] [-g|--gibberish]   Encrypt file or directory tree in-place")
 		fmt.Println("  vault unlock <path> [-p password]                   Verify HMAC & decrypt file or directory")
+		fmt.Println("  vault view   <path> [-p password]                   Stream encrypted file in volatile RAM (zero disk writes)")
 		fmt.Println("  vault status <path>                                 Inspect lock status and checkpoints")
 		fmt.Println("  vault version                                       Display CLI build version")
 		return
@@ -950,8 +1273,8 @@ func main() {
 		return
 	}
 
-	if action != "lock" && action != "unlock" && action != "status" {
-		fmt.Printf("Unknown command '%s'. Valid commands: lock, unlock, status, version\n", action)
+	if action != "lock" && action != "unlock" && action != "status" && action != "view" && action != "stream" {
+		fmt.Printf("Unknown command '%s'. Valid commands: lock, unlock, view, stream, status, version\n", action)
 		os.Exit(1)
 	}
 
@@ -979,6 +1302,39 @@ func main() {
 
 	if len(targets) == 0 {
 		fmt.Println("No eligible files found to process.\n")
+		return
+	}
+
+	if action == "view" || action == "stream" {
+		var targetFile string
+		for _, p := range targets {
+			st := checkFileStatus(p)
+			if strings.HasPrefix(st, "locked") {
+				targetFile = p
+				break
+			}
+		}
+		if targetFile == "" {
+			if len(targets) == 1 {
+				targetFile = targets[0]
+			} else {
+				fmt.Println("Error: No locked file found in target scope to view in RAM.\n")
+				os.Exit(1)
+			}
+		}
+		if password == "" {
+			password = readPasswordMasked("Enter Master Password to stream in RAM: ")
+			if password == "" {
+				fmt.Println("Error: Password cannot be empty.")
+				os.Exit(1)
+			}
+		}
+		ok, msg := viewFileV5(targetFile, password)
+		if !ok {
+			fmt.Printf("\n[FAILED: %s]\n\n", msg)
+			os.Exit(1)
+		}
+		fmt.Printf("\n[SUCCESS: %s]\n\n", msg)
 		return
 	}
 

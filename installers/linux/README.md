@@ -58,7 +58,7 @@ Universal Vault CLI installs as a standalone global terminal command usable from
    ```
    *Output:*
    ```text
-   Universal Vault CLI v5.5.3 (Go Native Architecture)
+   Universal Vault CLI v5.5.4 (Go Native Architecture)
    ```
 
 ---
@@ -113,7 +113,19 @@ Verifies HMAC-SHA256 authenticity and restores files back to their exact origina
 
 ---
 
-### 3. `vault status` — Inspect Encryption State
+### 3. `vault view` — Stream Encrypted File in Volatile RAM (Zero Disk Writes)
+Decrypts directly into volatile memory without creating physical plaintext files on disk:
+* **Text & Code Files**: Displayed directly in terminal stdout with auto-zeroized buffer.
+* **Rich Media & Documents (Images, 4K Video, Audio, PDF)**: Spawns an ephemeral local loopback server (`127.0.0.1:<port>`) with unguessable session token, launches default web browser, and supports HTTP 206 range scrubbing. Purges and zeroizes RAM upon pressing Enter or closing session.
+
+```bash
+vault view "Confidential.pdf"
+vault view "0a1b2c3d4e5f6789.vault"
+```
+
+---
+
+### 4. `vault status` — Inspect Encryption State
 Scans files and displays whether they are unlocked, locked with V5 AEAD armor, locked with legacy formats, or interrupted mid-operation.
 
 ```bash
@@ -123,7 +135,7 @@ vault status "/data/projects/secret_repo"
 *Example Output:*
 ```text
 ======================================================================
-  Universal Vault v5.5.3 (CLI Native): STATUS Operation
+  Universal Vault v5.5.4 (CLI Native): STATUS Operation
   Target Scope   : /data/projects/secret_repo
   Files Located  : 3
 ======================================================================
@@ -136,7 +148,7 @@ Status Summary: 2 Locked | 1 Unlocked
 
 ---
 
-### 4. `vault version`
+### 5. `vault version`
 Displays the active CLI version and architecture.
 ```bash
 vault version

@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 echo =======================================================
-echo        UNIVERSAL VAULT V5.5.3 - CHECK STATUS
+echo        UNIVERSAL VAULT V5.5.4 - CHECK STATUS
 echo =======================================================
 echo Inspecting files across directory...
 echo.
