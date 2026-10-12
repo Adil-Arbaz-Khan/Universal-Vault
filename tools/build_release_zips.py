@@ -168,7 +168,7 @@ universal_files = [
     (os.path.join(ROOT_DIR, "tools", "setup_termux.sh"), "tools/setup_termux.sh"),
 ]
 
-for folder in ["cmd", "bin", "installers", "Test_Samples"]:
+for folder in ["cmd", "bin", "installers", "Test_Samples", "assets"]:
     folder_p = os.path.join(ROOT_DIR, folder)
     if os.path.exists(folder_p):
         for root, dirs, files in os.walk(folder_p):
