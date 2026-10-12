@@ -302,7 +302,7 @@ Verify binary integrity against published provenance hashes:
 | **Linux ARM64** | `vault_linux_arm64` | `1724b5df89e3c872e5ecd4c25ace4532266fba10b24b6324731f8ba292d698b6` |
 | **macOS Apple Silicon** | `vault_darwin_arm64` | `6487fcfaa84989fb4921b92bfeb722aa058e99db1d86486e2ad28f8ad1d68e34` |
 | **macOS Intel** | `vault_darwin_amd64` | `465f775e8dfd42aa0a82ebe0edb0e8e58d3281a86802d6154d6164f229339110` |
-| **Android Native APK** | `UniversalVault-v5.5.4.apk` | `ddb4e00ea0567cb6b5fb517921fb259073b635dbf2905359d5d1540f17d1567e` |
+| **Android Native APK** | `UniversalVault-v5.5.4.apk` | `031a6afb849638114f2be2e9157dac258faaf34777d48f557cd3437668fd721d` |
 
 *Full verification guide and release history: [RELEASE_NOTES_v5.5.4.md](RELEASE_NOTES_v5.5.4.md)*
 
