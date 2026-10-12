@@ -201,6 +201,23 @@ with open(sums_path, "w", encoding="utf-8") as f:
 
 print("\n[+] Wrote release checksums to:", sums_path)
 
+# Create canonical unversioned alias copies for permanent GitHub /releases/latest/download/ links
+canonical_aliases = [
+    (f"Universal-Vault-v{VERSION}-Windows.zip", "Universal-Vault-Windows.zip"),
+    (f"Universal-Vault-v{VERSION}-Linux.zip", "Universal-Vault-Linux.zip"),
+    (f"Universal-Vault-v{VERSION}-macOS.zip", "Universal-Vault-macOS.zip"),
+    (f"Universal-Vault-v{VERSION}-Android.zip", "Universal-Vault-Android.zip"),
+    (f"Universal-Vault-v{VERSION}-iOS.zip", "Universal-Vault-iOS.zip"),
+    (f"Universal-Vault-v{VERSION}-Universal.zip", "Universal-Vault-Universal.zip"),
+    (f"UniversalVault-v{VERSION}.apk", "UniversalVault.apk"),
+]
+for src_name, alias_name in canonical_aliases:
+    src_f = os.path.join(OUT_DIR, src_name)
+    if os.path.exists(src_f):
+        alias_f = os.path.join(OUT_DIR, alias_name)
+        shutil.copy2(src_f, alias_f)
+        print(f"[+] Created Permanent Release Alias: {alias_name}")
+
 # Query native CLI hashes from installers/
 cli_hashes = {}
 for plat, fname in [

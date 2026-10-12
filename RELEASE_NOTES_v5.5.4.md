@@ -40,17 +40,17 @@ Universal Vault **v5.5.4** introduces **Volatile RAM Streaming (`vault view` / S
 
 ### Release Package Archives (ZIP):
 ```text
-d5797a0ac5eaf990d86e329de0b2a08a4d439c28fa6f4cae614864984a0f7ec5  Universal-Vault-v5.5.4-Windows.zip
-6fe4f1d1d7bf0aa6556ab92a141bbb4f55a1114a46de858e9ff21be8eb089bac  Universal-Vault-v5.5.4-Linux.zip
-46a7640ad293ae58f2afddaf4f6df8e2f0b8e35058ba6b05f7ba8e927895131b  Universal-Vault-v5.5.4-macOS.zip
-e9429dc0cb652490542132fbcca984eaeeff3967d799c4c739181cabdc72e46a  Universal-Vault-v5.5.4-Android.zip
-dbe9b9a314fe24c5dcbdeb596ecaec0d0632669693dad12a6e8cc93d9df15efd  Universal-Vault-v5.5.4-iOS.zip
-1e60596b77f60e741993ee93fb20ea65640efc225eec2f6c9f0af1cbc68cd978  Universal-Vault-v5.5.4-Universal.zip
+9835301a829851821f282384eeee454fb7a6354fdcdf55a7b081312336a7b76f  Universal-Vault-v5.5.4-Windows.zip
+0ed269a6b4c722ff9cd4dfe0dc6be9112507df386561a534244c24fca651df48  Universal-Vault-v5.5.4-Linux.zip
+719c98eb1706a99bbe0a29bcdc450296c1148974133b0f7475d64e8499c450f6  Universal-Vault-v5.5.4-macOS.zip
+96733eef5c6fa7801f852a2a26d534ebbce0513595861bce5c4fda4f5c7cea09  Universal-Vault-v5.5.4-Android.zip
+63a489515b0bdfc9254599a26b8a13984acc0a6741ddcf1015c287406b007c94  Universal-Vault-v5.5.4-iOS.zip
+d361c9dddf304b1d33ba7915e14741ac7fbe2a036d255a4bd532cfd9e4a7a444  Universal-Vault-v5.5.4-Universal.zip
 ```
 
 ### Standalone Android APK:
 ```text
-c5be129cb27784c97d546c8d1826f17cb2aba9490a23028cd8bf8a78f06cb4f0  UniversalVault-v5.5.4.apk
+ddb4e00ea0567cb6b5fb517921fb259073b635dbf2905359d5d1540f17d1567e  UniversalVault-v5.5.4.apk
 ```
 
 ### Extracted Native CLI Binaries:
